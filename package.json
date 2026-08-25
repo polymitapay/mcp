@@ -1,0 +1,29 @@
+{
+  "name": "wallet-mcp-server",
+  "version": "0.1.0",
+  "description": "MCP server an end user installs into their agent to consume the PolyPay catalog with x402 auto-payment over XRPL",
+  "type": "module",
+  "bin": {
+    "polypay-wallet-mcp": "./dist/index.js"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc"
+  },
+  "keywords": ["mcp", "x402", "xrpl"],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@x402/core": "^2.22.0",
+    "@x402/xrpl": "^2.22.0",
+    "@x402/mcp": "^2.22.0",
+    "xrpl": "^5.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0",
+    "dotenv": "^16.4.0"
+  }
+}
