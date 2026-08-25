@@ -1,10 +1,10 @@
 {
-  "name": "wallet-mcp-server",
+  "name": "@polymitapay/mcp",
   "version": "0.1.0",
   "description": "MCP server an end user installs into their agent to consume the PolyPay catalog with x402 auto-payment over XRPL",
   "type": "module",
   "bin": {
-    "polypay-wallet-mcp": "./dist/index.js"
+    "polymitapay-mcp": "./dist/index.js"
   },
   "files": ["dist", "README.md", "LICENSE"],
   "scripts": {

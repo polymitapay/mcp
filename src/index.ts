@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // Entry point (PLAN.md Fase 2c): discover the catalog, build the aggregated
 // tool registry + search index, then hand off to the stdio MCP server.
 // stdout is reserved for the MCP JSON-RPC channel -- every log here goes to

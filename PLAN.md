@@ -47,7 +47,7 @@ Hoy no existe ninguna forma de listar providers sin auth: `GET /v1/providers` (`
 
 ### Fase 2 — El paquete nuevo: `wallet-mcp-server`
 
-Ubicación: `AGENTRAIL/wallet-mcp-server/` (este mismo directorio — repo hermano de `agent-rail`/`front-agent-rail`/`test-mcp-provider`/`x402-spike`, mismo patrón que ya existe). Nombre de paquete sugerido para cuando se publique: `@polypay/wallet-mcp` (mismo naming que `@piprail/mcp`).
+Ubicación: `AGENTRAIL/wallet-mcp-server/` (este mismo directorio — repo hermano de `agent-rail`/`front-agent-rail`/`test-mcp-provider`/`x402-spike`, mismo patrón que ya existe). Nombre de paquete sugerido para cuando se publique: `@polymitapay/mcp` (mismo naming que `@piprail/mcp`).
 
 **Dependencias — atención, esto es lo más no-obvio de toda la investigación**: `agent-rail` usa DOS generaciones distintas de paquetes MCP a la vez — la vieja (`@modelcontextprotocol/sdk` v1.30, un solo paquete monolítico) y la nueva (`@modelcontextprotocol/{server,client,node}` v2.0, separados). `@x402/mcp` (de donde sale `x402MCPClient`) está tipado contra la clase `Client` de la vieja (`@modelcontextprotocol/sdk/client/index.js`), **no** contra la nueva. Además, la nueva generación (`@modelcontextprotocol/node` v2) solo trae transporte HTTP (`NodeStreamableHTTPServerTransport`) — **no tiene transporte stdio**, que es justo lo que hace falta para un MCP server local que un cliente como Claude Desktop spawnea. Confirmado (revisando los `.d.ts` reales instalados): `@modelcontextprotocol/sdk` v1.30 sí trae `server/stdio.js` (`StdioServerTransport`) y `client/stdio.js`/`client/streamableHttp.js`. Conclusión: **este paquete nuevo usa únicamente `@modelcontextprotocol/sdk` v1.x** (no los paquetes v2 split que usa el resto de `agent-rail`), más `@x402/core`, `@x402/xrpl`, `@x402/mcp`, y `xrpl`.
 
@@ -89,18 +89,23 @@ Pendiente real, no resuelto: si dos providers ofrecen tools casi idénticas, el 
 - `POLYPAY_WALLET_SEED` (obligatoria) — seed XRPL clásica.
 - `POLYPAY_API_URL` (default: la URL de producción de agent-rail).
 - `POLYPAY_NETWORK` (default `testnet` para el release inicial — recomendado empezar recomendando testnet en la documentación, mainnet como uso avanzado explícito).
-- `POLYPAY_PROVIDERS` (opcional, lista de ids separados por coma) — si se define, filtra el catálogo a solo esos providers en vez de exponer el marketplace completo. Sin esto, por default se expone TODO el catálogo aprobado de esa red — mejor default para "usuario común que no conoce IDs de provider", con el filtro como escape hatch para quien sí sabe lo que quiere.
+- `POLYPAY_PROVIDERS` (opcional, lista de ids separados por coma) — si se define, filtra el catálogo a solo esos providers en vez de exponer el marketplace completo. Sin esto, por default se expone TODO el catálogo aprobado de esa red — mejor default para "usuario común que no conoce IDs de provider", con el filtro como escape hatch para quien sí sabe lo que quiere. **Todavía no implementado** (2026-08-25) — documentado acá desde la investigación original, pendiente de construir.
 
-### Fase 3 — Empaquetado y docs de instalación
+**Mejora futura anotada (2026-08-25), no ahora**: `POLYPAY_PROVIDERS` con UUIDs crudos es incómodo de tipear a mano. Dos caminos posibles cuando se retome:
+  - **Slug real en backend** — campo nuevo en `Provider` (DB, migración, slugificación al registrar, manejo de colisiones, expuesto en `GET /v1/catalog`). La solución "correcta" a largo plazo, pero scope de backend real para una feature que hoy ni está construida.
+  - **Slug calculado al vuelo, sin tocar el backend** — dejar que el filtro acepte también `provider.name` (o el mismo saneado que ya usa `toNamespace()` en `tool-registry.ts`), sin garantía de unicidad (si dos providers comparten nombre, matchea a ambos).
+  Se decidió no resolverlo ahora — evaluar cuando haya evidencia real de que la gente lo necesita (volumen de providers, confusión real), no antes.
 
-- `package.json`: `bin: { "polypay-wallet-mcp": "./dist/index.js" }`, shebang `#!/usr/bin/env node` en el entrypoint, para que funcione con `npx -y @polypay/wallet-mcp` sin instalación previa.
+### Fase 3 — Empaquetado y docs de instalación (completa, 2026-08-25)
+
+- `package.json`: `bin: { "polymitapay-mcp": "./dist/index.js" }`, shebang `#!/usr/bin/env node` en el entrypoint, para que funcione con `npx -y @polymitapay/mcp` sin instalación previa.
 - Documentar el bloque de config exacto para pegar en un cliente MCP (Claude Desktop u otro), algo así:
   ```json
   {
     "mcpServers": {
       "polypay": {
         "command": "npx",
-        "args": ["-y", "@polypay/wallet-mcp"],
+        "args": ["-y", "@polymitapay/mcp"],
         "env": {
           "POLYPAY_WALLET_SEED": "s...",
           "POLYPAY_NETWORK": "testnet"
@@ -110,6 +115,8 @@ Pendiente real, no resuelto: si dos providers ofrecen tools casi idénticas, el 
   }
   ```
 - Ser explícito en la doc sobre el riesgo: la seed queda en texto plano en un archivo de config local — mismo trade-off que `@piprail/mcp`, no hay forma de evitarlo con una wallet no-custodial. Recomendar wallets de testnet / montos chicos para probar.
+
+Hecho: shebang agregado, `npm run build` verificado (compila, preserva el shebang, `node dist/index.js` corre y sirve el loop completo real por stdio, tanto una tool paga como una gratis). `README.md` reescrito con el bloque de instalación, tabla de env vars, y la advertencia de seguridad. `.env.example` agregado (no se publica, `files` en `package.json` no lo incluye) para documentar las variables sin exponer la seed real. `POLYPAY_API_URL` hoy defaultea a `localhost:3000` porque agent-rail todavía no tiene URL de producción pública — pendiente actualizar el default cuando eso exista.
 
 ## Verificación
 
