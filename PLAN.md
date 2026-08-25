@@ -73,14 +73,17 @@ Ubicación: `AGENTRAIL/wallet-mcp-server/` (este mismo directorio — repo herma
   (Patrón idéntico al que ya usan los tests e2e de `agent-rail`, ej. `test/x402-consume.e2e-spec.ts`.)
 
 **Agregación de tools**:
-- Por cada `x402MCPClient` conectado, llamar `.listTools()` (ya trae el schema real, reenviado tal cual por nuestro proxy) y namespacear cada nombre (ej. `${providerName-saneado}__${toolName}`) para evitar colisiones entre providers con tools de mismo nombre.
-- Guardar un mapa `toolName-namespaced → { providerId, realToolName }` para el ruteo en `tools/call`.
+- Por cada `x402MCPClient` conectado, llamar `.listTools()` (ya trae el schema real, reenviado tal cual por nuestro proxy) y namespacear cada nombre como `${providerName-saneado}_${providerId-corto}__${toolName}`. El sufijo del id (no solo el nombre) es necesario porque el nombre **no** es único — se encontró en la práctica que dos providers reales sin `name` configurado caían al mismo fallback (`mcpUrl`) y colisionaban en el mismo namespace, pisándose uno a otro en silencio en el registro (un provider entero desaparecía sin ningún error ni aviso).
+- Guardar un mapa `toolName-namespaced → { providerId, providerName, realToolName, description, pricePerCall, pricePerCallRlusd, x402Mcp }` — la `description` sale del schema MCP real de la tool (siempre presente en cualquier tool MCP válida), el precio sale de cruzar contra `provider.tools` del catálogo (`null` si esa tool puntual no está priceada, corre gratis).
 - Si un provider falla al conectar/listar (su MCP real está caído) — loguearlo a stderr y seguir con el resto, no tirar abajo todo el proceso.
 
-**`tools/call` del servidor stdio**:
-- Resolver `{ providerId, realToolName }` desde el nombre namespaced.
-- Llamar `x402MCPClient.callTool(realToolName, args)` del cliente correspondiente — el auto-pago (detectar 402, firmar, reintentar) lo maneja `x402MCPClient` solo.
-- Traducir `x402MCPToolCallResult` de vuelta al formato que espera el `Server` de salida.
+**Diseño revisado (2026-08-25): NO se expone una tool por cada tool real descubierta.** El diseño original de este documento asumía que `tools/list` del server de salida iba a listar cada tool namespaced directamente. Se cambió tras razonar el caso de un catálogo grande: paginar `tools/list` (el protocolo MCP lo soporta, `cursor`/`nextCursor`) resuelve el tamaño de la respuesta, pero no resuelve que un cliente MCP arma su inventario completo de tools ANTES de conversar, y ese inventario completo — con su schema — viaja en el contexto del LLM en cada turno. Un catálogo de cientos de tools sería caro en tokens y degradaría qué tan bien el agente elige, sin importar cómo se transporte por el wire.
+
+En vez de eso, el server de salida expone **siempre exactamente dos tools fijas**, sin importar cuántos providers haya:
+- **`polypay_search({ query })`** — busca sobre el registro agregado (nombre + descripción + provider) con `minisearch` (BM25 local, sin red, sin dependencias externas — no hace falta exacta, alcanza con coincidencia por palabras clave con ranking). Devuelve hasta 20 candidatos (deliberadamente generoso, no un tope chico tipo "3" — los resultados son livianos: nombre + descripción + precio, no el schema completo) con `{ tool, provider, description, pricePerCall, pricePerCallRlusd }`.
+- **`polypay_call({ tool, arguments })`** — resuelve `tool` (el id namespaced devuelto por `polypay_search`) contra el registro, llama `x402MCPClient.callTool(realToolName, arguments)` de esa entrada — el auto-pago lo sigue manejando `x402MCPClient` solo — y traduce el `x402MCPToolCallResult` (que trae `paymentMade`/`paymentResponse`, campos que el schema `CallToolResult` no conoce) a `{ content, isError, _meta: {'x402/payment-made', 'x402/payment-response'} }`.
+
+Pendiente real, no resuelto: si dos providers ofrecen tools casi idénticas, el ranking de `minisearch` puede favorecer sistemáticamente al mismo siempre — con 20 resultados y 2 providers hoy no se nota, pero con densidad real de providers compitiendo, un provider legítimo podría no aparecer nunca en el top-20. Diversificación real (garantizar exposición pareja entre providers competidores) queda anotada para cuando haya catálogo suficiente para siquiera poder probarlo.
 
 **Configuración (variables de entorno)**:
 - `POLYPAY_WALLET_SEED` (obligatoria) — seed XRPL clásica.
@@ -113,7 +116,7 @@ Ubicación: `AGENTRAIL/wallet-mcp-server/` (este mismo directorio — repo herma
 Dado que el código lo escribe el usuario, la verificación es manual (no hay suite e2e nueva que Claude vaya a escribir para este paquete):
 1. Levantar `agent-rail` local + `test-mcp-provider`, tener al menos un provider `APPROVED` con una tool con precio, en testnet.
 2. Correr el nuevo paquete localmente (`tsx src/index.ts` o `node dist/index.js`) con una wallet de testnet fondeada real en `POLYPAY_WALLET_SEED`.
-3. Conectarle un cliente MCP de prueba por stdio (puede ser un script chico con `StdioClientTransport` del SDK, o directo un cliente MCP real como Claude Desktop apuntando al binario local) — confirmar `tools/list` trae las tools namespaced, y `tools/call` sobre una tool paga ejecuta el pago real on-chain (verificar balance de la wallet del usuario bajó, y el resultado real de la tool vuelve) sin que el usuario tuviera que escribir ningún código de pago.
+3. Conectarle un cliente MCP de prueba por stdio (puede ser un script chico con `StdioClientTransport` del SDK, o directo un cliente MCP real como Claude Desktop apuntando al binario local) — confirmar `tools/list` trae exactamente `polypay_search` y `polypay_call` (nunca las tools reales directo), que `polypay_search` devuelve candidatos relevantes con precio, y que `polypay_call` sobre uno de ellos ejecuta el pago real on-chain (verificar balance de la wallet del usuario bajó, y el resultado real de la tool vuelve) sin que el usuario tuviera que escribir ningún código de pago. Validado end-to-end (2026-08-25) con un cliente `StdioClientTransport` real spawneando el server.
 4. Confirmar que nada se imprime a stdout salvo el protocolo JSON-RPC (cualquier log de más rompe el cliente).
 
 ## Orden de trabajo sugerido
