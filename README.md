@@ -74,6 +74,10 @@ can't afford to lose.
 | `POLYPAY_WALLET_SEED` | yes | — | The wallet seed from step 1. |
 | `POLYPAY_NETWORK` | no | `testnet` | `testnet` (free, for trying this out) or `mainnet` (real funds). |
 | `POLYPAY_API_URL` | no | `https://api.polymitapay.com` | Only relevant if you're running this against your own copy of PolyPay's backend, not the hosted one. |
+| `POLYPAY_MAX_PER_CALL_XRP` | no | no limit | Refuses any single call priced above this many XRP. |
+| `POLYPAY_MAX_PER_CALL_RLUSD` | no | no limit | Same, in RLUSD. |
+| `POLYPAY_MAX_TOTAL_XRP` | no | no limit | Refuses further XRP payments once this many have been spent since the server started. Resets when it restarts. |
+| `POLYPAY_MAX_TOTAL_RLUSD` | no | no limit | Same, in RLUSD. |
 
 A future setting, `POLYPAY_PROVIDERS`, will let you restrict which
 providers your agent can see and pay — not built yet, see `PLAN.md`.

@@ -21,6 +21,41 @@ import { x402Client } from '@x402/core/client';
 // balance from unrelated payments it receives.
 const RLUSD_TRUST_LINE_LIMIT = '1000000000';
 
+const DROPS_PER_XRP = 1_000_000n;
+const DECIMAL_AMOUNT_RE = /^\d+(\.\d+)?$/;
+
+function parseDecimalEnvAmount(envVarName: string, value: string): string {
+  if (!DECIMAL_AMOUNT_RE.test(value)) {
+    throw new Error(
+      `${envVarName} must be a plain decimal number (e.g. "5" or "1.5"), got "${value}"`,
+    );
+  }
+  return value;
+}
+
+// Converts a human XRP amount ("5", "1.5") into an integer drops string --
+// XRPL's own atomic unit, and what payment requirements and spendControls'
+// per-asset caps both use.
+function xrpToDrops(xrp: string): bigint {
+  const [whole, frac = ''] = xrp.split('.');
+  const fracDrops = (frac + '000000').slice(0, 6);
+  return BigInt(whole || '0') * DROPS_PER_XRP + BigInt(fracDrops || '0');
+}
+
+export interface SpendLimits {
+  // Per-call caps, enforced by x402Client's own spendControls before a
+  // payment is ever signed.
+  maxPerCallXrp?: string; // human XRP, e.g. "5"
+  maxPerCallRlusd?: string; // human RLUSD (~USD), e.g. "2"
+  // Cumulative caps for the life of this process -- x402Client has no
+  // concept of these (its spendControls is per-payment only), so they're
+  // tracked and enforced here by hand. Resets on restart; a real multi-day
+  // budget would need this persisted somewhere, which is a bigger change
+  // than this first pass.
+  maxTotalXrp?: string;
+  maxTotalRlusd?: string;
+}
+
 export interface PaymentClientHandle {
   paymentClient: x402Client;
   walletAddress: string;
@@ -36,6 +71,7 @@ export interface PaymentClientHandle {
 export function createPaymentClient(
   seed: string,
   network: 'testnet' | 'mainnet',
+  spendLimits: SpendLimits = {},
 ): PaymentClientHandle {
   const wallet = Wallet.fromSeed(seed);
   const signer = createXrplWalletSigner(wallet);
@@ -109,17 +145,80 @@ export function createPaymentClient(
     verifiedIssuers.add(issuer);
   }
 
-  // x402Client's default spendControls only auto-approve assets it
-  // recognizes as "default" for the network (@x402/xrpl only lists RLUSD,
-  // matched by its raw hex currency code -- agent-rail's PaymentRequirements
-  // send the human-readable "XRP"/"RLUSD" strings, so neither matches and
-  // BOTH options get rejected before any signing happens). Disabled here;
-  // the real wallet-mcp-server needs a deliberate spendControls policy
-  // (allowedAssets + maxAmountPerPayment) as a user-facing safety rail, not
-  // just "off".
+  // -- Spend limits (see the TODO this closes: MAX_PER_CALL / MAX_TOTAL) --
+
+  const maxPerCallXrpDrops =
+    spendLimits.maxPerCallXrp !== undefined
+      ? xrpToDrops(
+          parseDecimalEnvAmount(
+            'POLYPAY_MAX_PER_CALL_XRP',
+            spendLimits.maxPerCallXrp,
+          ),
+        )
+      : null;
+  const maxTotalXrpDrops =
+    spendLimits.maxTotalXrp !== undefined
+      ? xrpToDrops(
+          parseDecimalEnvAmount('POLYPAY_MAX_TOTAL_XRP', spendLimits.maxTotalXrp),
+        )
+      : null;
+  const maxPerCallRlusd =
+    spendLimits.maxPerCallRlusd !== undefined
+      ? parseDecimalEnvAmount(
+          'POLYPAY_MAX_PER_CALL_RLUSD',
+          spendLimits.maxPerCallRlusd,
+        )
+      : null;
+  const maxTotalRlusd =
+    spendLimits.maxTotalRlusd !== undefined
+      ? Number(
+          parseDecimalEnvAmount(
+            'POLYPAY_MAX_TOTAL_RLUSD',
+            spendLimits.maxTotalRlusd,
+          ),
+        )
+      : null;
+
+  // Atomic (XRP drops, exact) vs a plain Number (RLUSD) -- RLUSD amounts are
+  // always small decimal strings here, and this is a soft safety-rail
+  // total, not the money itself (the real transaction amount is still the
+  // exact string XRPL settles), so float imprecision at these scales isn't
+  // a real risk.
+  let spentXrpDrops = 0n;
+  let spentRlusd = 0;
+
+  function isRlusdAsset(asset: string): boolean {
+    return asset.toLowerCase() === RLUSD_CURRENCY.toLowerCase();
+  }
+
   const paymentClient = new x402Client()
     .register('xrpl:*', new ExactXrplScheme(signer))
-    .setSpendControls(false)
+    // The SDK's own per-payment cap. Only XRP needs an explicit
+    // allowedAssets entry to remain payable at all once this is enabled --
+    // it isn't a "default asset" for @x402/xrpl (only RLUSD is), so with
+    // spendControls on and no entry it gets rejected outright, cap or not.
+    // RLUSD passes the allowlist on its own; its per-call cap is the
+    // top-level USD figure, not a per-asset atomic one -- that path only
+    // accepts whole-number amounts, and RLUSD's are always decimal (e.g.
+    // "1.5"). Left fully off (false) when neither cap is configured, same
+    // as before -- see the comment on setSpendControls(false) history.
+    .setSpendControls(
+      maxPerCallXrpDrops === null && maxPerCallRlusd === null
+        ? false
+        : {
+            allowedAssets: [
+              {
+                network: 'xrpl:*',
+                asset: 'XRP',
+                ...(maxPerCallXrpDrops !== null
+                  ? { maxAmountPerPayment: maxPerCallXrpDrops.toString() }
+                  : {}),
+              },
+            ],
+            maxAmountPerPayment:
+              maxPerCallRlusd !== null ? `$${maxPerCallRlusd}` : false,
+          },
+    )
     // Filters the accepted requirements down to the preferred asset before
     // the default selector (accepts[0]) runs, so choosing an asset needs no
     // custom selector -- and never hard-fails a call: if the provider
@@ -136,22 +235,60 @@ export function createPaymentClient(
     })
     // Runs after the selector has already picked which requirement to pay,
     // whether that came from an explicit asset preference or the plain
-    // default -- so this catches every RLUSD payment, not just the ones
-    // routed here through setPreferredAsset.
+    // default -- so this catches every payment, not just the ones routed
+    // here through setPreferredAsset. Budget check first (cheap, no network)
+    // so a call over the cumulative limit never bothers opening a trust
+    // line for a payment it's about to refuse anyway.
     .onBeforePaymentCreation(async ({ selectedRequirements }) => {
-      if (selectedRequirements.asset.toLowerCase() !== 'rlusd') {
+      const rlusd = isRlusdAsset(selectedRequirements.asset);
+
+      if (rlusd && maxTotalRlusd !== null) {
+        const amount = Number(selectedRequirements.amount);
+        const wouldBe = spentRlusd + amount;
+        if (wouldBe > maxTotalRlusd) {
+          return {
+            abort: true,
+            reason: `this payment (${amount} RLUSD) would bring this session's total to ${wouldBe} RLUSD, over the configured POLYPAY_MAX_TOTAL_RLUSD of ${maxTotalRlusd}`,
+          };
+        }
+      }
+      if (!rlusd && maxTotalXrpDrops !== null) {
+        const amountDrops = BigInt(selectedRequirements.amount);
+        const wouldBeDrops = spentXrpDrops + amountDrops;
+        if (wouldBeDrops > maxTotalXrpDrops) {
+          return {
+            abort: true,
+            reason: `this payment (${amountDrops} drops) would bring this session's total to ${wouldBeDrops} drops, over the configured POLYPAY_MAX_TOTAL_XRP (${maxTotalXrpDrops} drops)`,
+          };
+        }
+      }
+
+      if (rlusd) {
+        const issuer =
+          (selectedRequirements.extra?.issuer as string | undefined) ??
+          (network === 'mainnet' ? RLUSD_MAINNET_ISSUER : RLUSD_TESTNET_ISSUER);
+        try {
+          await ensureRlusdTrustLine(issuer);
+        } catch (error) {
+          return {
+            abort: true,
+            reason: `could not open the RLUSD trust line needed for this payment: ${String(error)}`,
+          };
+        }
+      }
+    })
+    // Only counts toward the cumulative total once the facilitator actually
+    // confirms settlement -- a signed-but-rejected payment (bad verify,
+    // failed settle) never happened as far as the wallet's spend is
+    // concerned.
+    .onPaymentResponse(async ({ requirements, settleResponse }) => {
+      if (!settleResponse?.success) {
         return;
       }
-      const issuer =
-        (selectedRequirements.extra?.issuer as string | undefined) ??
-        (network === 'mainnet' ? RLUSD_MAINNET_ISSUER : RLUSD_TESTNET_ISSUER);
-      try {
-        await ensureRlusdTrustLine(issuer);
-      } catch (error) {
-        return {
-          abort: true,
-          reason: `could not open the RLUSD trust line needed for this payment: ${String(error)}`,
-        };
+      if (isRlusdAsset(requirements.asset)) {
+        spentRlusd += Number(requirements.amount);
+      } else {
+        spentXrpDrops += BigInt(requirements.amount);
       }
     });
 

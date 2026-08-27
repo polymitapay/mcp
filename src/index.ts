@@ -28,10 +28,23 @@ function requireEnv(name: string): string {
   return value;
 }
 
+// All optional -- omitted means "no limit", same as before these existed.
+function optionalEnv(name: string): string | undefined {
+  return process.env[name] || undefined;
+}
+
 async function main() {
   const seed = requireEnv('POLYPAY_WALLET_SEED');
-  const { paymentClient, walletAddress, setPreferredAsset } =
-    createPaymentClient(seed, NETWORK);
+  const { paymentClient, walletAddress, setPreferredAsset } = createPaymentClient(
+    seed,
+    NETWORK,
+    {
+      maxPerCallXrp: optionalEnv('POLYPAY_MAX_PER_CALL_XRP'),
+      maxPerCallRlusd: optionalEnv('POLYPAY_MAX_PER_CALL_RLUSD'),
+      maxTotalXrp: optionalEnv('POLYPAY_MAX_TOTAL_XRP'),
+      maxTotalRlusd: optionalEnv('POLYPAY_MAX_TOTAL_RLUSD'),
+    },
+  );
   console.error(`using wallet ${walletAddress}`);
 
   const providers = await fetchCatalog(AGENT_RAIL_URL, NETWORK);
