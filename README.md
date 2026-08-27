@@ -73,7 +73,7 @@ can't afford to lose.
 | --- | --- | --- | --- |
 | `POLYPAY_WALLET_SEED` | yes | — | The wallet seed from step 1. |
 | `POLYPAY_NETWORK` | no | `testnet` | `testnet` (free, for trying this out) or `mainnet` (real funds). |
-| `POLYPAY_API_URL` | no | `http://localhost:3000` | Only relevant if you're running this against your own copy of PolyPay's backend, not the hosted one. |
+| `POLYPAY_API_URL` | no | `https://api.polymitapay.com` | Only relevant if you're running this against your own copy of PolyPay's backend, not the hosted one. |
 
 A future setting, `POLYPAY_PROVIDERS`, will let you restrict which
 providers your agent can see and pay — not built yet, see `PLAN.md`.

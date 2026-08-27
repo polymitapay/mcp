@@ -14,10 +14,11 @@ import { buildToolRegistry } from './tool-registry.js';
 import { ToolSearchIndex } from './search.js';
 import { startServer } from './server.js';
 
-const AGENT_RAIL_URL = process.env.POLYPAY_API_URL ?? 'http://localhost:3000';
+const AGENT_RAIL_URL = process.env.POLYPAY_API_URL ?? 'https://api.polymitapay.com';
 // PLAN.md recommends testnet as the default for the initial release --
 // mainnet stays an explicit, deliberate opt-in.
-const NETWORK = process.env.POLYPAY_NETWORK ?? 'testnet';
+const NETWORK: 'testnet' | 'mainnet' =
+  process.env.POLYPAY_NETWORK === 'mainnet' ? 'mainnet' : 'testnet';
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -29,7 +30,8 @@ function requireEnv(name: string): string {
 
 async function main() {
   const seed = requireEnv('POLYPAY_WALLET_SEED');
-  const { paymentClient, walletAddress } = createPaymentClient(seed);
+  const { paymentClient, walletAddress, setPreferredAsset } =
+    createPaymentClient(seed, NETWORK);
   console.error(`using wallet ${walletAddress}`);
 
   const providers = await fetchCatalog(AGENT_RAIL_URL, NETWORK);
@@ -40,7 +42,7 @@ async function main() {
 
   const searchIndex = new ToolSearchIndex(registry);
 
-  await startServer(registry, searchIndex);
+  await startServer(registry, searchIndex, setPreferredAsset);
   console.error('polypay-wallet-mcp listening on stdio');
 }
 

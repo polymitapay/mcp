@@ -116,7 +116,7 @@ Pendiente real, no resuelto: si dos providers ofrecen tools casi idénticas, el 
   ```
 - Ser explícito en la doc sobre el riesgo: la seed queda en texto plano en un archivo de config local — mismo trade-off que `@piprail/mcp`, no hay forma de evitarlo con una wallet no-custodial. Recomendar wallets de testnet / montos chicos para probar.
 
-Hecho: shebang agregado, `npm run build` verificado (compila, preserva el shebang, `node dist/index.js` corre y sirve el loop completo real por stdio, tanto una tool paga como una gratis). `README.md` reescrito con el bloque de instalación, tabla de env vars, y la advertencia de seguridad. `.env.example` agregado (no se publica, `files` en `package.json` no lo incluye) para documentar las variables sin exponer la seed real. `POLYPAY_API_URL` hoy defaultea a `localhost:3000` porque agent-rail todavía no tiene URL de producción pública — pendiente actualizar el default cuando eso exista.
+Hecho: shebang agregado, `npm run build` verificado (compila, preserva el shebang, `node dist/index.js` corre y sirve el loop completo real por stdio, tanto una tool paga como una gratis). `README.md` reescrito con el bloque de instalación, tabla de env vars, y la advertencia de seguridad. `.env.example` agregado (no se publica, `files` en `package.json` no lo incluye) para documentar las variables sin exponer la seed real. `POLYPAY_API_URL` actualizado (2026-08-26, Fase H) a `https://api.polymitapay.com` — agent-rail ya tiene una URL real (deploy interno, ver `deployment-internal-test.md`), dejó de defaultear a `localhost:3000`.
 
 ## Verificación
 

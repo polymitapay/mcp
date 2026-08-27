@@ -21,6 +21,7 @@ const CALL_TOOL_NAME = 'polypay_call';
 export async function startServer(
   registry: Map<string, RegisteredTool>,
   searchIndex: ToolSearchIndex,
+  setPreferredAsset: (asset: string | null) => void,
 ): Promise<void> {
   const server = new Server(
     { name: 'polypay-wallet-mcp', version: '0.1.0' },
@@ -47,7 +48,7 @@ export async function startServer(
       {
         name: CALL_TOOL_NAME,
         description:
-          'Invoke a tool previously discovered via polypay_search. Payment (if the tool is priced) is signed and settled automatically with the wallet configured for this server.',
+          'Invoke a tool previously discovered via polypay_search. Payment (if the tool is priced) is signed and settled automatically with the wallet configured for this server. If the provider accepts more than one asset (see pricePerCall/pricePerCallRlusd on the search result), pass "asset" to choose which one to pay with -- otherwise XRP is used by default. Paying in RLUSD opens the wallet\'s RLUSD trust line automatically the first time it\'s needed.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -58,6 +59,12 @@ export async function startServer(
             arguments: {
               type: 'object',
               description: "Arguments for the underlying tool, per its own schema returned by polypay_search's description.",
+            },
+            asset: {
+              type: 'string',
+              enum: ['XRP', 'RLUSD'],
+              description:
+                'Optional. Which asset to pay with, if the provider accepts more than one. Defaults to XRP when omitted.',
             },
           },
           required: ['tool', 'arguments'],
@@ -84,9 +91,16 @@ export async function startServer(
     if (name === CALL_TOOL_NAME) {
       const toolId = (args as { tool?: unknown })?.tool;
       const toolArgs = (args as { arguments?: unknown })?.arguments;
+      const asset = (args as { asset?: unknown })?.asset;
       if (typeof toolId !== 'string') {
         return {
           content: [{ type: 'text', text: '"tool" must be a string (the id from polypay_search)' }],
+          isError: true,
+        };
+      }
+      if (asset !== undefined && asset !== 'XRP' && asset !== 'RLUSD') {
+        return {
+          content: [{ type: 'text', text: '"asset" must be "XRP" or "RLUSD" when given' }],
           isError: true,
         };
       }
@@ -102,10 +116,19 @@ export async function startServer(
           isError: true,
         };
       }
-      const result = await entry.x402Mcp.callTool(
-        entry.realToolName,
-        (toolArgs as Record<string, unknown>) ?? {},
-      );
+      // Applies only to this call: reset in `finally` so a preference never
+      // leaks into a later call that didn't ask for one -- payments share
+      // one paymentClient across every provider (see xrpl-payment-client.ts).
+      setPreferredAsset(asset ?? null);
+      let result;
+      try {
+        result = await entry.x402Mcp.callTool(
+          entry.realToolName,
+          (toolArgs as Record<string, unknown>) ?? {},
+        );
+      } finally {
+        setPreferredAsset(null);
+      }
       // Reshape rather than pass through x402MCPToolCallResult as-is: it
       // carries paymentMade/paymentResponse fields the CallToolResult schema
       // doesn't know about. Payment proof still reaches the caller, just
