@@ -1,7 +1,9 @@
 // Aggregates every provider's tools into one flat, namespaced map. This is
 // the data source for search.ts (discovery) -- it's never exposed directly
-// as tools/list entries (see PLAN.md Fase 2c: the stdio server only exposes
-// polypay_search / polypay_call, not one entry per real tool).
+// as tools/list entries; the stdio server always exposes exactly two fixed
+// tools (polypay_search, polypay_call) instead, since a large catalog
+// exposed one-tool-per-entry would put every real tool's schema into the
+// agent's context on every turn (see server.ts).
 
 import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';

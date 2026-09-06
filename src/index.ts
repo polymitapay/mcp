@@ -1,12 +1,11 @@
 #!/usr/bin/env node
-// Entry point (PLAN.md Fase 2c): discover the catalog, build the aggregated
-// tool registry + search index, then hand off to the stdio MCP server.
-// stdout is reserved for the MCP JSON-RPC channel -- every log here goes to
-// stderr on purpose.
+// Entry point: discover the catalog, build the aggregated tool registry +
+// search index, then hand off to the stdio MCP server. stdout is reserved
+// for the MCP JSON-RPC channel -- every log here goes to stderr on purpose.
 
 // Dev-only convenience -- the real published package never reads a .env
 // file, the MCP client (Claude Desktop, etc.) injects POLYPAY_* directly
-// into process.env via its own config (see PLAN.md Fase 3).
+// into process.env via its own config.
 import 'dotenv/config';
 import { createPaymentClient } from './xrpl-payment-client.js';
 import { fetchCatalog } from './catalog.js';
@@ -16,8 +15,9 @@ import { startServer } from './server.js';
 import { runSetupWizard } from './setup-wizard.js';
 
 const AGENT_RAIL_URL = process.env.POLYPAY_API_URL ?? 'https://api.polymitapay.com';
-// PLAN.md recommends testnet as the default for the initial release --
-// mainnet stays an explicit, deliberate opt-in.
+// Testnet is the default for a first run -- safer for someone trying this
+// out for the first time; mainnet (real funds) stays an explicit,
+// deliberate opt-in.
 const NETWORK: 'testnet' | 'mainnet' =
   process.env.POLYPAY_NETWORK === 'mainnet' ? 'mainnet' : 'testnet';
 

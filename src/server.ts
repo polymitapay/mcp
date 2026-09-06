@@ -1,7 +1,11 @@
 // The outbound side: an MCP server over stdio that a client (Claude
 // Desktop, etc.) spawns locally. Exposes exactly two fixed tools --
 // polypay_search and polypay_call -- never one entry per real catalog tool,
-// no matter how large the catalog gets (see PLAN.md Fase 2c).
+// no matter how large the catalog gets: a client builds its full tool
+// inventory (names + schemas) into every turn's context before ever
+// calling anything, so a large catalog exposed one-tool-per-entry would be
+// expensive in tokens and hurt tool selection, no matter how the list is
+// paginated over the wire.
 //
 // stdout is the JSON-RPC channel here -- nothing but the SDK's own writes
 // may touch it. All our own logging goes to stderr (see index.ts).

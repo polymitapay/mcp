@@ -2,9 +2,9 @@
 // aggregated tool registry -- lets polypay_search return a short, relevant
 // list instead of the stdio server dumping every real tool into tools/list.
 // No embeddings, no network calls, no external dependency beyond the index
-// itself; see PLAN.md Fase 2c for why this beats exact-match (misses
-// paraphrases) without reaching for semantic search (real added cost/latency
-// not justified by today's catalog size).
+// itself -- beats exact-match (which misses paraphrases) without reaching
+// for semantic search (real added cost/latency not justified by today's
+// catalog size).
 
 import MiniSearch from 'minisearch';
 import type { RegisteredTool } from './tool-registry.js';

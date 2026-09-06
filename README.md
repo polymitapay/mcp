@@ -83,13 +83,12 @@ can't afford to lose.
 | `POLYPAY_MAX_TOTAL_RLUSD` | no | no limit | Same, in RLUSD. |
 
 A future setting, `POLYPAY_PROVIDERS`, will let you restrict which
-providers your agent can see and pay — not built yet, see `PLAN.md`.
+providers your agent can see and pay — not built yet.
 
 ## For contributors
 
 This section is for people working on `wallet-mcp-server` itself, not
-for installing it — see `PLAN.md` for the architecture and design
-decisions behind it.
+for installing it.
 
 ```bash
 npm install
