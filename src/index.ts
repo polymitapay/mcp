@@ -13,6 +13,7 @@ import { fetchCatalog } from './catalog.js';
 import { buildToolRegistry } from './tool-registry.js';
 import { ToolSearchIndex } from './search.js';
 import { startServer } from './server.js';
+import { runSetupWizard } from './setup-wizard.js';
 
 const AGENT_RAIL_URL = process.env.POLYPAY_API_URL ?? 'https://api.polymitapay.com';
 // PLAN.md recommends testnet as the default for the initial release --
@@ -34,6 +35,17 @@ function optionalEnv(name: string): string | undefined {
 }
 
 async function main() {
+  // An MCP client (Claude Desktop, Claude Code, etc.) spawns this over
+  // stdio with POLYPAY_WALLET_SEED already injected via its own config --
+  // it never has a TTY. Only a human running `npx @polymitapay/mcp`
+  // directly, seed not configured yet, gets the interactive wizard;
+  // anything else falls straight through to the real server, same as
+  // before this existed.
+  if (!process.env.POLYPAY_WALLET_SEED && process.stdin.isTTY && process.stdout.isTTY) {
+    await runSetupWizard();
+    return;
+  }
+
   const seed = requireEnv('POLYPAY_WALLET_SEED');
   const { paymentClient, walletAddress, setPreferredAsset } = createPaymentClient(
     seed,

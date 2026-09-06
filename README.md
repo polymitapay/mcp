@@ -33,13 +33,16 @@ note below before you do that.
 
 ## 2. Install
 
-Paste this into your MCP client's config (for Claude Desktop, that's
+If you ran `npx @polymitapay/mcp` directly, the interactive setup may have
+already offered to install this automatically into Claude Code and/or
+Claude Desktop — if it did, you can skip this step. Otherwise, paste this
+into your MCP client's config (for Claude Desktop, that's
 `claude_desktop_config.json`), filling in the seed from step 1:
 
 ```json
 {
   "mcpServers": {
-    "polypay": {
+    "polymitapay": {
       "command": "npx",
       "args": ["-y", "@polymitapay/mcp"],
       "env": {
