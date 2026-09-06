@@ -1,6 +1,6 @@
 // The outbound side: an MCP server over stdio that a client (Claude
 // Desktop, etc.) spawns locally. Exposes exactly two fixed tools --
-// polypay_search and polypay_call -- never one entry per real catalog tool,
+// polymitapay_search and polymitapay_call -- never one entry per real catalog tool,
 // no matter how large the catalog gets: a client builds its full tool
 // inventory (names + schemas) into every turn's context before ever
 // calling anything, so a large catalog exposed one-tool-per-entry would be
@@ -19,8 +19,8 @@ import {
 import type { RegisteredTool } from './tool-registry.js';
 import type { ToolSearchIndex } from './search.js';
 
-const SEARCH_TOOL_NAME = 'polypay_search';
-const CALL_TOOL_NAME = 'polypay_call';
+const SEARCH_TOOL_NAME = 'polymitapay_search';
+const CALL_TOOL_NAME = 'polymitapay_call';
 
 export async function startServer(
   registry: Map<string, RegisteredTool>,
@@ -28,7 +28,7 @@ export async function startServer(
   setPreferredAsset: (asset: string | null) => void,
 ): Promise<void> {
   const server = new Server(
-    { name: 'polypay-wallet-mcp', version: '0.1.0' },
+    { name: 'polymitapay-wallet-mcp', version: '0.1.0' },
     { capabilities: { tools: {} } },
   );
 
@@ -37,7 +37,7 @@ export async function startServer(
       {
         name: SEARCH_TOOL_NAME,
         description:
-          'Search the PolyPay catalog for tools matching a query (by name, description, or provider). Returns the closest matches with their provider, description, and price. Call polypay_call with the returned "tool" id to actually invoke one.',
+          'Search the PolyPay catalog for tools matching a query (by name, description, or provider). Returns the closest matches with their provider, description, and price. Call polymitapay_call with the returned "tool" id to actually invoke one.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -52,17 +52,17 @@ export async function startServer(
       {
         name: CALL_TOOL_NAME,
         description:
-          'Invoke a tool previously discovered via polypay_search. Payment (if the tool is priced) is signed and settled automatically with the wallet configured for this server. If the provider accepts more than one asset (see pricePerCall/pricePerCallRlusd on the search result), pass "asset" to choose which one to pay with -- otherwise XRP is used by default. Paying in RLUSD opens the wallet\'s RLUSD trust line automatically the first time it\'s needed.',
+          'Invoke a tool previously discovered via polymitapay_search. Payment (if the tool is priced) is signed and settled automatically with the wallet configured for this server. If the provider accepts more than one asset (see pricePerCall/pricePerCallRlusd on the search result), pass "asset" to choose which one to pay with -- otherwise XRP is used by default. Paying in RLUSD opens the wallet\'s RLUSD trust line automatically the first time it\'s needed.',
         inputSchema: {
           type: 'object',
           properties: {
             tool: {
               type: 'string',
-              description: 'The "tool" id returned by polypay_search.',
+              description: 'The "tool" id returned by polymitapay_search.',
             },
             arguments: {
               type: 'object',
-              description: "Arguments for the underlying tool, per its own schema returned by polypay_search's description.",
+              description: "Arguments for the underlying tool, per its own schema returned by polymitapay_search's description.",
             },
             asset: {
               type: 'string',
@@ -98,7 +98,7 @@ export async function startServer(
       const asset = (args as { asset?: unknown })?.asset;
       if (typeof toolId !== 'string') {
         return {
-          content: [{ type: 'text', text: '"tool" must be a string (the id from polypay_search)' }],
+          content: [{ type: 'text', text: '"tool" must be a string (the id from polymitapay_search)' }],
           isError: true,
         };
       }
@@ -114,7 +114,7 @@ export async function startServer(
           content: [
             {
               type: 'text',
-              text: `unknown tool id "${toolId}" -- call polypay_search first to get a valid id`,
+              text: `unknown tool id "${toolId}" -- call polymitapay_search first to get a valid id`,
             },
           ],
           isError: true,

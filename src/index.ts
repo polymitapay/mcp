@@ -68,7 +68,7 @@ async function main() {
   const searchIndex = new ToolSearchIndex(registry);
 
   await startServer(registry, searchIndex, setPreferredAsset);
-  console.error('polypay-wallet-mcp listening on stdio');
+  console.error('polymitapay-wallet-mcp listening on stdio');
 }
 
 main().catch((error: unknown) => {

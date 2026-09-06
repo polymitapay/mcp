@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "MCP server an end user installs into their agent to consume the PolyPay catalog with x402 auto-payment over XRPL",
   "type": "module",
+  "engines": {
+    "node": ">=20.12.0"
+  },
   "bin": {
     "polymitapay-mcp": "./dist/index.js"
   },

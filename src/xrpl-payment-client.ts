@@ -65,7 +65,7 @@ export interface PaymentClientHandle {
   // "XRP" or "RLUSD") when the provider accepts more than one. Applies to
   // every payment made through paymentClient until changed again -- the
   // caller (server.ts) is responsible for resetting it to null after each
-  // polypay_call so a preference never leaks into a later, unrelated call
+  // polymitapay_call so a preference never leaks into a later, unrelated call
   // that didn't ask for one.
   setPreferredAsset: (asset: string | null) => void;
 }

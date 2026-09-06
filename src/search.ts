@@ -1,5 +1,5 @@
 // Local, offline keyword search (BM25-style, via minisearch) over the
-// aggregated tool registry -- lets polypay_search return a short, relevant
+// aggregated tool registry -- lets polymitapay_search return a short, relevant
 // list instead of the stdio server dumping every real tool into tools/list.
 // No embeddings, no network calls, no external dependency beyond the index
 // itself -- beats exact-match (which misses paraphrases) without reaching
