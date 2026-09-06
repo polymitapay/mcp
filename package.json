@@ -7,7 +7,7 @@
     "node": ">=20.12.0"
   },
   "bin": {
-    "polymitapay-mcp": "./dist/index.js"
+    "polymitapay-mcp": "dist/index.js"
   },
   "publishConfig": {
     "access": "public"
