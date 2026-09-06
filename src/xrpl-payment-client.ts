@@ -22,7 +22,9 @@ import { x402Client } from '@x402/core/client';
 const RLUSD_TRUST_LINE_LIMIT = '1000000000';
 
 const DROPS_PER_XRP = 1_000_000n;
-const DECIMAL_AMOUNT_RE = /^\d+(\.\d+)?$/;
+// Exported so setup-wizard.ts can validate spend-limit input with the same
+// rule this module enforces, instead of a second regex drifting from it.
+export const DECIMAL_AMOUNT_RE = /^\d+(\.\d+)?$/;
 
 function parseDecimalEnvAmount(envVarName: string, value: string): string {
   if (!DECIMAL_AMOUNT_RE.test(value)) {

@@ -11,18 +11,28 @@ import {
   confirm,
   multiselect,
   password,
+  text,
   note,
   spinner,
   log,
   isCancel,
   cancel,
 } from '@clack/prompts';
+import { styleText } from 'node:util';
 import { Client, Wallet } from 'xrpl';
 import { XRPL_TESTNET_WS_URL } from '@x402/xrpl';
+import { DECIMAL_AMOUNT_RE } from './xrpl-payment-client.js';
 import { CLIENT_TARGETS } from './client-targets/index.js';
 
 type Network = 'testnet' | 'mainnet';
 type WalletSource = 'existing' | 'new';
+
+interface SpendLimitAnswers {
+  maxPerCallXrp?: string;
+  maxPerCallRlusd?: string;
+  maxTotalXrp?: string;
+  maxTotalRlusd?: string;
+}
 
 // A sentinel for the "go back" option in a select menu -- a string, not a
 // Symbol: @clack/prompts already uses a unique symbol to mean "cancelled"
@@ -102,15 +112,21 @@ async function resolveWallet(
   network: Network,
   source: WalletSource,
 ): Promise<{ seed: string; address: string }> {
-  log.warn(
-    "This seed is a secret, like a password -- whoever has it can move funds from this wallet.\n\n" +
-      "It ends up stored in plain text in your MCP client's local config file. That's " +
-      "inherent to how this is built (it never sends your key anywhere, or holds your " +
-      "funds for you) -- the tradeoff is that nothing else protects that file for you " +
-      'either.\n\n' +
-      (network === 'testnet'
-        ? 'Testnet is free, worthless play money, so this is low-stakes.'
-        : "Use a mainnet wallet with only small amounts you'd be comfortable losing."),
+  // A boxed, red note rather than log.warn() -- this is the one warning in
+  // the whole flow the user must not skim past.
+  note(
+    styleText(
+      'red',
+      "This seed is a secret, like a password -- whoever has it can move funds from this wallet.\n\n" +
+        "It ends up stored in plain text in your MCP client's local config file. That's " +
+        "inherent to how this is built (it never sends your key anywhere, or holds your " +
+        "funds for you) -- the tradeoff is that nothing else protects that file for you " +
+        'either.\n\n' +
+        (network === 'testnet'
+          ? 'Testnet is free, worthless play money, so this is low-stakes.'
+          : "Use a mainnet wallet with only small amounts you'd be comfortable losing."),
+    ),
+    'Security warning',
   );
 
   if (source === 'existing') {
@@ -145,6 +161,70 @@ async function resolveWallet(
   return { seed: wallet.seed!, address: wallet.address };
 }
 
+function validateOptionalDecimal(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return DECIMAL_AMOUNT_RE.test(value)
+    ? undefined
+    : 'Enter a plain decimal number (e.g. "5" or "1.5"), or leave blank for no limit.';
+}
+
+// Right after the security warning above -- the wallet is undefended by
+// design (see resolveWallet), so this is the one concrete mitigation this
+// package can actually offer: a hard ceiling on what it's allowed to spend.
+async function promptSpendLimits(): Promise<SpendLimitAnswers> {
+  const wantLimits = checkCancel(
+    await confirm({
+      message: 'Set spending limits for this wallet? (recommended)',
+      initialValue: true,
+    }),
+  );
+  if (!wantLimits) {
+    return {};
+  }
+
+  const maxPerCallXrp = checkCancel(
+    await text({
+      message: 'Max XRP per call (blank = no limit)',
+      placeholder: 'e.g. 5',
+      defaultValue: '',
+      validate: validateOptionalDecimal,
+    }),
+  );
+  const maxPerCallRlusd = checkCancel(
+    await text({
+      message: 'Max RLUSD per call (blank = no limit)',
+      placeholder: 'e.g. 2',
+      defaultValue: '',
+      validate: validateOptionalDecimal,
+    }),
+  );
+  const maxTotalXrp = checkCancel(
+    await text({
+      message: 'Max total XRP for this run (resets on restart; blank = no limit)',
+      placeholder: 'e.g. 20',
+      defaultValue: '',
+      validate: validateOptionalDecimal,
+    }),
+  );
+  const maxTotalRlusd = checkCancel(
+    await text({
+      message: 'Max total RLUSD for this run (resets on restart; blank = no limit)',
+      placeholder: 'e.g. 20',
+      defaultValue: '',
+      validate: validateOptionalDecimal,
+    }),
+  );
+
+  return {
+    maxPerCallXrp: maxPerCallXrp || undefined,
+    maxPerCallRlusd: maxPerCallRlusd || undefined,
+    maxTotalXrp: maxTotalXrp || undefined,
+    maxTotalRlusd: maxTotalRlusd || undefined,
+  };
+}
+
 export async function runSetupWizard(): Promise<void> {
   intro('PolymitaPay MCP setup');
 
@@ -152,12 +232,20 @@ export async function runSetupWizard(): Promise<void> {
   const { seed, address } = await resolveWallet(network, source);
   log.info(`Wallet address: ${address}`);
 
+  const spendLimits = await promptSpendLimits();
+
   const mcpServerConfig = {
     command: 'npx',
     args: ['-y', '@polymitapay/mcp'],
     env: {
       POLYPAY_WALLET_SEED: seed,
       POLYPAY_NETWORK: network,
+      ...(spendLimits.maxPerCallXrp ? { POLYPAY_MAX_PER_CALL_XRP: spendLimits.maxPerCallXrp } : {}),
+      ...(spendLimits.maxPerCallRlusd
+        ? { POLYPAY_MAX_PER_CALL_RLUSD: spendLimits.maxPerCallRlusd }
+        : {}),
+      ...(spendLimits.maxTotalXrp ? { POLYPAY_MAX_TOTAL_XRP: spendLimits.maxTotalXrp } : {}),
+      ...(spendLimits.maxTotalRlusd ? { POLYPAY_MAX_TOTAL_RLUSD: spendLimits.maxTotalRlusd } : {}),
     },
   };
 
