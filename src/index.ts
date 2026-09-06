@@ -3,10 +3,12 @@
 // search index, then hand off to the stdio MCP server. stdout is reserved
 // for the MCP JSON-RPC channel -- every log here goes to stderr on purpose.
 
-// Dev-only convenience -- the real published package never reads a .env
-// file, the MCP client (Claude Desktop, etc.) injects POLYPAY_* directly
-// into process.env via its own config.
-import 'dotenv/config';
+// The real published package never reads a .env file -- the MCP client
+// (Claude Desktop, etc.) injects POLYPAY_* directly into process.env via
+// its own config. Loading one for local development is the `dev` npm
+// script's job (node's own --env-file flag), never this module's -- a
+// static `import 'dotenv/config'` here would run even for real installs,
+// and dotenv is a devDependency only, so it isn't there to import.
 import { createPaymentClient } from './xrpl-payment-client.js';
 import { fetchCatalog } from './catalog.js';
 import { buildToolRegistry } from './tool-registry.js';

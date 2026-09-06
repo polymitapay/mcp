@@ -127,7 +127,7 @@ there, not touching `src/setup-wizard.ts` itself.
 ```bash
 npm install
 cp .env.example .env   # fill in POLYPAY_WALLET_SEED yourself
-npm run dev              # tsx src/index.ts, reads .env via dotenv (dev only)
+npm run dev              # tsx --env-file=.env src/index.ts (dev only)
 npm run build             # tsc -> dist/
 ```
 

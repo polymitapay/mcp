@@ -1,6 +1,6 @@
 {
   "name": "@polymitapay/mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP server an end user installs into their agent to consume the PolyPay catalog with x402 auto-payment over XRPL",
   "type": "module",
   "engines": {
@@ -18,7 +18,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "dev": "tsx src/index.ts",
+    "dev": "tsx --env-file=.env src/index.ts",
     "build": "tsc"
   },
   "keywords": [
@@ -38,7 +38,6 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "dotenv": "^16.4.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }
