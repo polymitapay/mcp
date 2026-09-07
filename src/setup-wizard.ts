@@ -349,7 +349,17 @@ export async function runSetupWizard(): Promise<void> {
     return failed.has(s.target.id);
   });
 
+  // A concrete, copy-pasteable first prompt -- someone who just finished
+  // this wizard has two new tools and no idea what to do with them.
+  // Deliberately generic (not tied to any one provider) since this wizard
+  // runs against whatever catalog the user's POLYPAY_API_URL points at.
+  const tryItPrompt = styleText(
+    'green',
+    'Search PolymitaPay for something that says hello, and use it.',
+  );
+
   if (manualNeeded.length === 0) {
+    note(tryItPrompt, 'Try this in your agent, after restarting it');
     outro("Restart your MCP client and you're set.");
     return;
   }
@@ -369,5 +379,6 @@ export async function runSetupWizard(): Promise<void> {
     console.log('');
   }
 
+  note(tryItPrompt, 'Try this in your agent, after restarting it');
   outro("Restart your MCP client when you're done.");
 }
