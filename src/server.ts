@@ -88,7 +88,7 @@ export async function startServer(
           isError: true,
         };
       }
-      const results = searchIndex.search(query);
+      const results = await searchIndex.search(query);
       return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
     }
 

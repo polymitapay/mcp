@@ -33,7 +33,6 @@
     "@x402/core": "^2.22.0",
     "@x402/mcp": "^2.22.0",
     "@x402/xrpl": "^2.22.0",
-    "minisearch": "^7.2.0",
     "xrpl": "^5.0.0"
   },
   "devDependencies": {

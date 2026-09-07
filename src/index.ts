@@ -67,7 +67,7 @@ async function main() {
   const registry = await buildToolRegistry(AGENT_RAIL_URL, providers, paymentClient);
   console.error(`discovered ${registry.size} tool(s), ready to search`);
 
-  const searchIndex = new ToolSearchIndex(registry);
+  const searchIndex = new ToolSearchIndex(registry, AGENT_RAIL_URL, NETWORK);
 
   await startServer(registry, searchIndex, setPreferredAsset);
   console.error('polymitapay-wallet-mcp listening on stdio');
