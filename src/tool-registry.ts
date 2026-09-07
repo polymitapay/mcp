@@ -33,40 +33,58 @@ export interface RegisteredTool {
 // overwrote the first's entries in the registry Map -- one provider's tools
 // disappeared with no warning, not even a name collision the agent could see
 // and pick between.
-function toNamespace(provider: CatalogProvider): string {
-  const sanitizedName = provider.name
+export function toNamespace(providerId: string, providerName: string): string {
+  const sanitizedName = providerName
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
-  const shortId = provider.id.replace(/-/g, '').slice(0, 8);
+  const shortId = providerId.replace(/-/g, '').slice(0, 8);
   return `${sanitizedName}_${shortId}`;
+}
+
+// One x402-wrapped MCP connection per provider, reused for every tool call
+// against it. `connections` is shared between buildToolRegistry (which
+// connects to every provider approved when this process started) and
+// search.ts's lazy on-demand path (a provider approved afterwards) -- either
+// caller gets the same live connection back if the other already opened it.
+export async function connectProvider(
+  agentRailUrl: string,
+  providerId: string,
+  paymentClient: x402Client,
+  connections: Map<string, x402MCPClient>,
+): Promise<x402MCPClient> {
+  const cached = connections.get(providerId);
+  if (cached) return cached;
+
+  const mcpClient = new McpClient({ name: 'wallet-mcp-server', version: '0.1.0' });
+  const transport = new StreamableHTTPClientTransport(
+    new URL(`${agentRailUrl}/mcp/${providerId}`),
+  );
+  await mcpClient.connect(transport);
+  const x402Mcp = new x402MCPClient(mcpClient, paymentClient);
+  connections.set(providerId, x402Mcp);
+  return x402Mcp;
 }
 
 export async function buildToolRegistry(
   agentRailUrl: string,
   providers: CatalogProvider[],
   paymentClient: x402Client,
+  connections: Map<string, x402MCPClient>,
 ): Promise<Map<string, RegisteredTool>> {
   const registry = new Map<string, RegisteredTool>();
 
   for (const provider of providers) {
     try {
-      const mcpClient = new McpClient({
-        name: 'wallet-mcp-server',
-        version: '0.1.0',
-      });
-      const transport = new StreamableHTTPClientTransport(
-        new URL(`${agentRailUrl}/mcp/${provider.id}`),
+      const x402Mcp = await connectProvider(
+        agentRailUrl,
+        provider.id,
+        paymentClient,
+        connections,
       );
-      await mcpClient.connect(transport);
-
-      // Wrapped once per provider and kept in the registry entry -- tools/call
-      // routing (polymitapay_call) reuses this same x402Mcp instance instead of
-      // reconnecting per call.
-      const x402Mcp = new x402MCPClient(mcpClient, paymentClient);
       const { tools } = await x402Mcp.listTools();
 
-      const namespace = toNamespace(provider);
+      const namespace = toNamespace(provider.id, provider.name);
       for (const tool of tools) {
         const priced = provider.tools.find((t) => t.toolName === tool.name);
         registry.set(`${namespace}__${tool.name}`, {

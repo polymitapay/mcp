@@ -9,6 +9,7 @@
 // script's job (node's own --env-file flag), never this module's -- a
 // static `import 'dotenv/config'` here would run even for real installs,
 // and dotenv is a devDependency only, so it isn't there to import.
+import type { x402MCPClient } from '@x402/mcp';
 import { createPaymentClient } from './xrpl-payment-client.js';
 import { fetchCatalog } from './catalog.js';
 import { buildToolRegistry } from './tool-registry.js';
@@ -64,10 +65,25 @@ async function main() {
   const providers = await fetchCatalog(AGENT_RAIL_URL, NETWORK);
   console.error(`catalog: ${providers.length} approved provider(s) on ${NETWORK}`);
 
-  const registry = await buildToolRegistry(AGENT_RAIL_URL, providers, paymentClient);
+  // Shared between buildToolRegistry (every provider approved at startup)
+  // and ToolSearchIndex's lazy path (a provider approved afterwards) so a
+  // provider is only ever connected to once, whichever finds it first.
+  const connections = new Map<string, x402MCPClient>();
+  const registry = await buildToolRegistry(
+    AGENT_RAIL_URL,
+    providers,
+    paymentClient,
+    connections,
+  );
   console.error(`discovered ${registry.size} tool(s), ready to search`);
 
-  const searchIndex = new ToolSearchIndex(registry, AGENT_RAIL_URL, NETWORK);
+  const searchIndex = new ToolSearchIndex(
+    registry,
+    connections,
+    paymentClient,
+    AGENT_RAIL_URL,
+    NETWORK,
+  );
 
   await startServer(registry, searchIndex, setPreferredAsset);
   console.error('polymitapay-wallet-mcp listening on stdio');
