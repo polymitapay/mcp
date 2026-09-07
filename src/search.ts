@@ -1,12 +1,11 @@
-// Local, offline keyword search (BM25-style, via minisearch) over the
-// aggregated tool registry -- lets polymitapay_search return a short, relevant
-// list instead of the stdio server dumping every real tool into tools/list.
-// No embeddings, no network calls, no external dependency beyond the index
-// itself -- beats exact-match (which misses paraphrases) without reaching
-// for semantic search (real added cost/latency not justified by today's
-// catalog size).
-
-import MiniSearch from 'minisearch';
+// Search itself is server-side now: agent-rail computes an embedding per
+// tool (from the owner-typed toolName + description) at register/edit
+// time, and GET /v1/catalog/search ranks by cosine similarity against the
+// query -- real semantic matching, not just literal keyword overlap. This
+// class is now a thin adapter: call that endpoint, then map each hit back
+// to *this* process's local registry (built by buildToolRegistry, which
+// holds the live x402Mcp connection each hit's `tool` id needs for
+// polymitapay_call to actually invoke it).
 import type { RegisteredTool } from './tool-registry.js';
 
 export interface SearchResult {
@@ -17,53 +16,64 @@ export interface SearchResult {
   pricePerCallRlusd: string | null;
 }
 
-// Deliberately generous, not the small fixed "top 3" first floated: search
-// hits are lightweight (name + description + price, not full JSON schemas),
-// so a wide result set costs little and reduces the odds a legitimate
-// tool from a less-favored provider gets silently excluded by a ranking
-// tie-break. Real fairness (guaranteeing every competing provider surfaces
-// over time, not just "however wide the window is today") is a deliberate
-// feature for once the catalog has actual provider density -- not
-// buildable, or testable, against the 2 providers we have right now.
-const RESULT_LIMIT = 20;
+interface CatalogSearchHit {
+  providerId: string;
+  providerName: string;
+  toolName: string;
+  description: string;
+  pricePerCall: string;
+  pricePerCallRlusd: string;
+}
 
 export class ToolSearchIndex {
-  private readonly index: MiniSearch;
-  private readonly registry: Map<string, RegisteredTool>;
+  // "providerId::toolName" -> this process's local registry key, so a hit
+  // from agent-rail's search can be resolved back to a real, callable
+  // x402Mcp connection.
+  private readonly registryKeyByProviderTool: Map<string, string>;
 
-  constructor(registry: Map<string, RegisteredTool>) {
-    this.registry = registry;
-    this.index = new MiniSearch({
-      fields: ['name', 'description', 'providerName'],
-    });
-    this.index.addAll(
-      [...registry.entries()].map(([id, tool]) => ({
+  constructor(
+    private readonly registry: Map<string, RegisteredTool>,
+    private readonly agentRailUrl: string,
+    private readonly network: string,
+  ) {
+    this.registryKeyByProviderTool = new Map(
+      [...registry.entries()].map(([id, tool]) => [
+        `${tool.providerId}::${tool.realToolName}`,
         id,
-        name: tool.realToolName,
-        description: tool.description,
-        providerName: tool.providerName,
-      })),
+      ]),
     );
   }
 
-  search(query: string): SearchResult[] {
-    const hits = this.index.search(query, {
-      fuzzy: 0.2,
-      prefix: true,
-      boost: { name: 2 },
-    });
-    return hits.slice(0, RESULT_LIMIT).map((hit) => {
-      const tool = this.registry.get(hit.id as string);
-      if (!tool) {
-        throw new Error(`search index out of sync with registry for id ${String(hit.id)}`);
-      }
-      return {
-        tool: hit.id as string,
-        provider: tool.providerName,
-        description: tool.description,
-        pricePerCall: tool.pricePerCall,
-        pricePerCallRlusd: tool.pricePerCallRlusd,
-      };
-    });
+  async search(query: string): Promise<SearchResult[]> {
+    const url = new URL(`${this.agentRailUrl}/v1/catalog/search`);
+    url.searchParams.set('q', query);
+    url.searchParams.set('network', this.network);
+
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`catalog search failed: HTTP ${res.status}`);
+    }
+    const hits = (await res.json()) as CatalogSearchHit[];
+
+    const results: SearchResult[] = [];
+    for (const hit of hits) {
+      // A provider agent-rail knows about but whose real MCP was
+      // unreachable when this process's registry was built (see
+      // buildToolRegistry's try/catch) -- skip it, same as it already
+      // being silently absent from tools/list would.
+      const id = this.registryKeyByProviderTool.get(
+        `${hit.providerId}::${hit.toolName}`,
+      );
+      if (!id) continue;
+
+      results.push({
+        tool: id,
+        provider: hit.providerName,
+        description: hit.description,
+        pricePerCall: hit.pricePerCall,
+        pricePerCallRlusd: hit.pricePerCallRlusd,
+      });
+    }
+    return results;
   }
 }
