@@ -241,12 +241,26 @@ export function createPaymentClient(
     // custom selector -- and never hard-fails a call: if the provider
     // doesn't actually offer the preferred asset this call, the filter
     // yields nothing and we fall back to the full list instead.
+    //
+    // "RLUSD" (what server.ts's polymitapay_call accepts as `asset`) is a
+    // human label -- the wire-level requirement's own `asset` field for
+    // RLUSD is never that string, it's RLUSD_CURRENCY's 40-char hex
+    // currency code (confirmed live: a real RLUSD requirement's `asset`
+    // was "524C555344..."). Comparing preferredAsset against r.asset with
+    // plain string equality therefore NEVER matched RLUSD, silently fell
+    // through to the unfiltered list, and the default selector picked
+    // whatever came first (XRP) -- explicitly asking to pay in RLUSD
+    // always paid in XRP instead. Route the RLUSD case through the same
+    // isRlusdAsset() check already used correctly elsewhere in this file.
     .registerPolicy((_x402Version, requirements) => {
       if (!preferredAsset) {
         return requirements;
       }
-      const matches = requirements.filter(
-        (r) => r.asset.toLowerCase() === preferredAsset!.toLowerCase(),
+      const wantsRlusd = preferredAsset.toLowerCase() === 'rlusd';
+      const matches = requirements.filter((r) =>
+        wantsRlusd
+          ? isRlusdAsset(r.asset)
+          : r.asset.toLowerCase() === preferredAsset!.toLowerCase(),
       );
       return matches.length > 0 ? matches : requirements;
     })
