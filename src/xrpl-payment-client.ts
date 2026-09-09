@@ -193,6 +193,21 @@ export function createPaymentClient(
     return asset.toLowerCase() === RLUSD_CURRENCY.toLowerCase();
   }
 
+  // Human-readable amount for the preview log line -- RLUSD requirements
+  // are already a plain decimal string (see the comment on maxPerCallRlusd
+  // above), XRP requirements are atomic drops and need converting.
+  function formatAmountForPreview(asset: string, amount: string): string {
+    if (isRlusdAsset(asset)) {
+      return `${amount} RLUSD`;
+    }
+    const drops = BigInt(amount);
+    const whole = drops / DROPS_PER_XRP;
+    const frac = drops % DROPS_PER_XRP;
+    const fracStr =
+      frac === 0n ? '' : `.${frac.toString().padStart(6, '0').replace(/0+$/, '')}`;
+    return `${whole}${fracStr} XRP`;
+  }
+
   const paymentClient = new x402Client()
     .register('xrpl:*', new ExactXrplScheme(signer))
     // The SDK's own per-payment cap. Only XRP needs an explicit
@@ -242,6 +257,16 @@ export function createPaymentClient(
     // so a call over the cumulative limit never bothers opening a trust
     // line for a payment it's about to refuse anyway.
     .onBeforePaymentCreation(async ({ selectedRequirements }) => {
+      // Logged first, before any check below can abort -- so even a call
+      // rejected by a spend limit still leaves a record of what it would
+      // have paid. This is a stderr audit line, not an interactive
+      // confirmation: the stdio server declares no MCP `elicitation`
+      // capability, so there's no channel to pause and wait for a human
+      // "yes" mid-call yet.
+      console.error(
+        `[polymitapay] payment preview: ${formatAmountForPreview(selectedRequirements.asset, selectedRequirements.amount)} -> ${selectedRequirements.payTo} (${selectedRequirements.network})`,
+      );
+
       const rlusd = isRlusdAsset(selectedRequirements.asset);
 
       if (rlusd && maxTotalRlusd !== null) {
