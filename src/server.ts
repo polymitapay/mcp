@@ -22,6 +22,13 @@ import type { ToolSearchIndex } from './search.js';
 const SEARCH_TOOL_NAME = 'polymitapay_search';
 const CALL_TOOL_NAME = 'polymitapay_call';
 
+// Must exceed agent-rail's own MCP_CALL_MAX_TOTAL_TIMEOUT_MS (5 minutes,
+// see agent-rail/src/infrastructure/security/mcp-network-limits.ts) --
+// this hop wraps that one, so it needs a little extra room to avoid
+// cutting off a moment before agent-rail's own ceiling would have let the
+// real provider's call finish on its own.
+const AGENT_RAIL_CALL_MAX_TOTAL_TIMEOUT_MS = 5.5 * 60_000;
+
 export async function startServer(
   registry: Map<string, RegisteredTool>,
   searchIndex: ToolSearchIndex,
@@ -77,7 +84,7 @@ export async function startServer(
     ],
   }));
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const { name, arguments: args } = request.params;
 
     if (name === SEARCH_TOOL_NAME) {
@@ -124,11 +131,43 @@ export async function startServer(
       // leaks into a later call that didn't ask for one -- payments share
       // one paymentClient across every provider (see xrpl-payment-client.ts).
       setPreferredAsset(asset ?? null);
+
+      // Only relay progress if Claude actually asked for it by sending a
+      // token -- per the MCP spec, a progress notification must reference
+      // an active request's own token, so there's nothing to send when
+      // none was provided. resetTimeoutOnProgress/maxTotalTimeout/
+      // onprogress aren't in @x402/mcp's declared callTool() option type
+      // (a type-declaration gap, not a functional one -- confirmed against
+      // its compiled JS, which forwards options verbatim to the wrapped
+      // SDK Client that does support them) -- building the options as a
+      // separately-declared const rather than an inline object literal
+      // sidesteps the excess-property check that would otherwise flag
+      // this.
+      const progressToken = extra._meta?.progressToken;
+      const callOptions = {
+        resetTimeoutOnProgress: true,
+        maxTotalTimeout: AGENT_RAIL_CALL_MAX_TOTAL_TIMEOUT_MS,
+        ...(progressToken
+          ? {
+              onprogress: (progress: {
+                progress: number;
+                total?: number;
+                message?: string;
+              }) =>
+                extra.sendNotification({
+                  method: 'notifications/progress',
+                  params: { progressToken, ...progress },
+                }),
+            }
+          : {}),
+      };
+
       let result;
       try {
         result = await entry.x402Mcp.callTool(
           entry.realToolName,
           (toolArgs as Record<string, unknown>) ?? {},
+          callOptions,
         );
       } finally {
         setPreferredAsset(null);
