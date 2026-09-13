@@ -1,0 +1,36 @@
+name: Publish to npm
+
+# Manual and tag-triggered on purpose, not "on every push to main" -- a
+# publish is irreversible (npm only allows unpublishing within a short
+# window) and should be a deliberate act, not a side effect of merging.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  # Required for npm provenance: lets npm attest that this exact commit,
+  # in this exact workflow run, produced the published tarball -- so
+  # `npm audit signatures` (and installers who check) can verify the
+  # package wasn't tampered with between this repo and the registry.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.12.0"
+          registry-url: "https://registry.npmjs.org"
+
+      - run: npm install
+      - run: npm run build
+
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

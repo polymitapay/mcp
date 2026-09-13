@@ -4,7 +4,7 @@
 // to no config dir -- isPresent() is then always false and the target
 // silently excludes itself everywhere, no special-casing needed elsewhere.
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { ClientTarget, InstallResult, McpServerConfig } from './types.js';
@@ -58,6 +58,13 @@ function install(config: McpServerConfig): InstallResult {
     parsed.mcpServers ??= {};
     parsed.mcpServers[SERVER_NAME] = config;
     writeFileSync(path, JSON.stringify(parsed, null, 2));
+    // This file holds the wallet seed in plain text -- at least keep it
+    // unreadable by other local accounts. Windows has no POSIX mode bits
+    // (chmod there only toggles the read-only attribute, not real ACLs),
+    // so this is a meaningful hardening step on darwin only.
+    if (process.platform !== 'win32') {
+      chmodSync(path, 0o600);
+    }
     return { ok: true };
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : String(error) };

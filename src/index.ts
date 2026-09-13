@@ -10,7 +10,7 @@
 // static `import 'dotenv/config'` here would run even for real installs,
 // and dotenv is a devDependency only, so it isn't there to import.
 import type { x402MCPClient } from '@x402/mcp';
-import { createPaymentClient } from './xrpl-payment-client.js';
+import { createPaymentClient, type SignerSource } from './xrpl-payment-client.js';
 import { fetchCatalog } from './catalog.js';
 import { buildToolRegistry } from './tool-registry.js';
 import { ToolSearchIndex } from './search.js';
@@ -49,9 +49,23 @@ async function main() {
     return;
   }
 
-  const seed = requireEnv('POLYPAY_WALLET_SEED');
+  // Broker mode: a separately-installed daemon holds the key, this process
+  // only ever asks it to sign over a local socket (see src/broker/). Falls
+  // back to the direct seed path when the broker wasn't set up -- same as
+  // before broker mode existed. `POLYPAY_MASTER_ADDRESS` alone (no broker
+  // vars) means the wizard rotated to a Regular Key but the user declined
+  // (or couldn't) install the broker.
+  const brokerSocket = optionalEnv('POLYPAY_BROKER_SOCKET');
+  const brokerToken = optionalEnv('POLYPAY_BROKER_TOKEN');
+  const masterAddress = optionalEnv('POLYPAY_MASTER_ADDRESS');
+
+  const signerSource: SignerSource =
+    brokerSocket && brokerToken && masterAddress
+      ? { kind: 'broker', socketPath: brokerSocket, token: brokerToken, masterAddress }
+      : { kind: 'seed', seed: requireEnv('POLYPAY_WALLET_SEED'), masterAddress };
+
   const { paymentClient, walletAddress, setPreferredAsset } = createPaymentClient(
-    seed,
+    signerSource,
     NETWORK,
     {
       maxPerCallXrp: optionalEnv('POLYPAY_MAX_PER_CALL_XRP'),

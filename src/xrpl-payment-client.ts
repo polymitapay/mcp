@@ -14,6 +14,7 @@ import {
 } from '@x402/xrpl';
 import { ExactXrplScheme } from '@x402/xrpl/exact/client';
 import { x402Client } from '@x402/core/client';
+import { createBrokerSigner, type BrokerSigner } from './broker/client.js';
 
 // A generous trust line limit -- this is a ceiling on how much RLUSD the
 // wallet could ever hold, not an amount actually sent. Opening it once with
@@ -58,6 +59,17 @@ export interface SpendLimits {
   maxTotalRlusd?: string;
 }
 
+// Where the signing key actually lives. 'seed' is the original, direct
+// path (this process holds the key in memory); 'broker' delegates every
+// sign() to a separately-installed daemon over a local socket, so this
+// process -- the one `npx -y` refetches on every MCP client restart --
+// never sees the raw key at all. `masterAddress` is set on 'seed' only
+// when the seed itself is a Regular Key rather than the wallet's own; it's
+// always required on 'broker', since the broker never exposes a seed.
+export type SignerSource =
+  | { kind: 'seed'; seed: string; masterAddress?: string }
+  | { kind: 'broker'; socketPath: string; token: string; masterAddress: string };
+
 export interface PaymentClientHandle {
   paymentClient: x402Client;
   walletAddress: string;
@@ -71,12 +83,23 @@ export interface PaymentClientHandle {
 }
 
 export function createPaymentClient(
-  seed: string,
+  signerSource: SignerSource,
   network: 'testnet' | 'mainnet',
   spendLimits: SpendLimits = {},
 ): PaymentClientHandle {
-  const wallet = Wallet.fromSeed(seed);
-  const signer = createXrplWalletSigner(wallet);
+  // In 'seed' mode, xrpl.Wallet's own `masterAddress` option handles the
+  // Regular Key case: it signs with `seed`'s keypair but reports the
+  // *master* account's address, so a transaction built against
+  // signer.classicAddress is correctly attributed to the funded account,
+  // not the operating key's own (unfunded, never-activated) address.
+  const signer: BrokerSigner =
+    signerSource.kind === 'broker'
+      ? createBrokerSigner(signerSource.socketPath, signerSource.token, signerSource.masterAddress)
+      : createXrplWalletSigner(
+          signerSource.masterAddress
+            ? Wallet.fromSeed(signerSource.seed, { masterAddress: signerSource.masterAddress })
+            : Wallet.fromSeed(signerSource.seed),
+        );
 
   let preferredAsset: string | null = null;
   function setPreferredAsset(asset: string | null) {
@@ -112,7 +135,7 @@ export function createPaymentClient(
     const client = await getXrplClient();
     const { result } = await client.request({
       command: 'account_lines',
-      account: wallet.address,
+      account: signer.classicAddress,
       peer: issuer,
     });
     const hasTrustLine = result.lines.some(
@@ -121,7 +144,7 @@ export function createPaymentClient(
     if (!hasTrustLine) {
       const tx: TrustSet = {
         TransactionType: 'TrustSet',
-        Account: wallet.address,
+        Account: signer.classicAddress,
         LimitAmount: {
           currency: RLUSD_CURRENCY,
           issuer,
@@ -129,9 +152,9 @@ export function createPaymentClient(
         },
       };
       const prepared = await client.autofill(tx);
-      const signed = wallet.sign(prepared);
+      const { signedTxBlob } = await signer.sign(prepared as unknown as Record<string, unknown>);
       const { result: submitResult } = await client.submitAndWait(
-        signed.tx_blob,
+        signedTxBlob,
       );
       const meta = submitResult.meta;
       const engineResult =
@@ -333,5 +356,5 @@ export function createPaymentClient(
       }
     });
 
-  return { paymentClient, walletAddress: wallet.address, setPreferredAsset };
+  return { paymentClient, walletAddress: signer.classicAddress, setPreferredAsset };
 }
