@@ -9,7 +9,7 @@
 
 import { createServer, type Socket } from 'node:net';
 import { existsSync, unlinkSync } from 'node:fs';
-import { Wallet, type Transaction } from 'xrpl';
+import { Wallet, signPaymentChannelClaim, type Transaction } from 'xrpl';
 import { socketPath } from './protocol.js';
 import { readCredentials } from './store.js';
 import type { SignRequest, SignResponse, SignErrorResponse } from './protocol.js';
@@ -42,6 +42,15 @@ function main(): void {
       return;
     }
     try {
+      if (request.kind === 'claim') {
+        const signature = signPaymentChannelClaim(
+          request.channelId,
+          request.xrpAmount,
+          wallet.privateKey,
+        );
+        respond(socket, { signature });
+        return;
+      }
       const signed = wallet.sign(request.transaction as unknown as Transaction);
       respond(socket, { signedTxBlob: signed.tx_blob, hash: signed.hash });
     } catch (error) {

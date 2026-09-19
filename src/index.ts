@@ -64,6 +64,11 @@ async function main() {
       ? { kind: 'broker', socketPath: brokerSocket, token: brokerToken, masterAddress }
       : { kind: 'seed', seed: requireEnv('POLYPAY_WALLET_SEED'), masterAddress };
 
+  // Set once the setup wizard has opened a payment channel for this
+  // wallet. Absent means every XRP payment stays on the exact scheme, same
+  // as before channels existed.
+  const channelId = optionalEnv('POLYPAY_CHANNEL_ID');
+
   const { paymentClient, walletAddress, setPreferredAsset } = createPaymentClient(
     signerSource,
     NETWORK,
@@ -73,6 +78,8 @@ async function main() {
       maxTotalXrp: optionalEnv('POLYPAY_MAX_TOTAL_XRP'),
       maxTotalRlusd: optionalEnv('POLYPAY_MAX_TOTAL_RLUSD'),
     },
+    channelId,
+    AGENT_RAIL_URL,
   );
   console.error(`using wallet ${walletAddress}`);
 
