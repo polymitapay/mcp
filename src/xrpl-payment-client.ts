@@ -3,7 +3,7 @@
 // adding a second network later means a sibling module with the same shape
 // (e.g. stellar-payment-client.ts), not a rewrite of the callers.
 
-import { Client, Wallet, type TrustSet } from 'xrpl';
+import { Client, Wallet, signPaymentChannelClaim, type TrustSet } from 'xrpl';
 import {
   createXrplWalletSigner,
   RLUSD_CURRENCY,
@@ -14,6 +14,12 @@ import {
 } from '@x402/xrpl';
 import { ExactXrplScheme } from '@x402/xrpl/exact/client';
 import { x402Client } from '@x402/core/client';
+import { createBrokerSigner, signClaimViaBroker, type BrokerSigner } from './broker/client.js';
+import {
+  XRPL_CHANNEL_SCHEME,
+  XrplChannelClientScheme,
+  type ChannelClaimSigner,
+} from './xrpl-channel-client-scheme.js';
 
 // A generous trust line limit -- this is a ceiling on how much RLUSD the
 // wallet could ever hold, not an amount actually sent. Opening it once with
@@ -58,6 +64,17 @@ export interface SpendLimits {
   maxTotalRlusd?: string;
 }
 
+// Where the signing key actually lives. 'seed' is the original, direct
+// path (this process holds the key in memory); 'broker' delegates every
+// sign() to a separately-installed daemon over a local socket, so this
+// process -- the one `npx -y` refetches on every MCP client restart --
+// never sees the raw key at all. `masterAddress` is set on 'seed' only
+// when the seed itself is a Regular Key rather than the wallet's own; it's
+// always required on 'broker', since the broker never exposes a seed.
+export type SignerSource =
+  | { kind: 'seed'; seed: string; masterAddress?: string }
+  | { kind: 'broker'; socketPath: string; token: string; masterAddress: string };
+
 export interface PaymentClientHandle {
   paymentClient: x402Client;
   walletAddress: string;
@@ -71,12 +88,50 @@ export interface PaymentClientHandle {
 }
 
 export function createPaymentClient(
-  seed: string,
+  signerSource: SignerSource,
   network: 'testnet' | 'mainnet',
   spendLimits: SpendLimits = {},
+  // Set once the setup wizard has opened a payment channel for this
+  // wallet -- see the plan this implements. Absent means "no channel yet,"
+  // and every payment stays on the exact scheme, same as before this
+  // existed.
+  channelId?: string,
+  // Where to read the channel's last accepted amount from -- the claim
+  // base lives on the server, not here (see XrplChannelClientScheme).
+  // Only needed when channelId is set.
+  agentRailUrl?: string,
 ): PaymentClientHandle {
-  const wallet = Wallet.fromSeed(seed);
-  const signer = createXrplWalletSigner(wallet);
+  // In 'seed' mode, xrpl.Wallet's own `masterAddress` option handles the
+  // Regular Key case: it signs with `seed`'s keypair but reports the
+  // *master* account's address, so a transaction built against
+  // signer.classicAddress is correctly attributed to the funded account,
+  // not the operating key's own (unfunded, never-activated) address.
+  const seedWallet =
+    signerSource.kind === 'seed'
+      ? signerSource.masterAddress
+        ? Wallet.fromSeed(signerSource.seed, { masterAddress: signerSource.masterAddress })
+        : Wallet.fromSeed(signerSource.seed)
+      : null;
+
+  const signer: BrokerSigner =
+    signerSource.kind === 'broker'
+      ? createBrokerSigner(signerSource.socketPath, signerSource.token, signerSource.masterAddress)
+      : createXrplWalletSigner(seedWallet!);
+
+  // Same direct-vs-broker split as `signer` above, but for payment-channel
+  // claims -- a different signing primitive (signPaymentChannelClaim signs
+  // just {channel, amount} with the raw private key, not a prepared
+  // transaction), so it can't reuse `signer`/BrokerSigner as-is.
+  const channelClaimSigner: ChannelClaimSigner =
+    signerSource.kind === 'broker'
+      ? {
+          sign: (chId, xrpAmount) =>
+            signClaimViaBroker(signerSource.socketPath, signerSource.token, chId, xrpAmount),
+        }
+      : {
+          sign: async (chId, xrpAmount) =>
+            signPaymentChannelClaim(chId, xrpAmount, seedWallet!.privateKey),
+        };
 
   let preferredAsset: string | null = null;
   function setPreferredAsset(asset: string | null) {
@@ -112,7 +167,7 @@ export function createPaymentClient(
     const client = await getXrplClient();
     const { result } = await client.request({
       command: 'account_lines',
-      account: wallet.address,
+      account: signer.classicAddress,
       peer: issuer,
     });
     const hasTrustLine = result.lines.some(
@@ -121,7 +176,7 @@ export function createPaymentClient(
     if (!hasTrustLine) {
       const tx: TrustSet = {
         TransactionType: 'TrustSet',
-        Account: wallet.address,
+        Account: signer.classicAddress,
         LimitAmount: {
           currency: RLUSD_CURRENCY,
           issuer,
@@ -129,9 +184,9 @@ export function createPaymentClient(
         },
       };
       const prepared = await client.autofill(tx);
-      const signed = wallet.sign(prepared);
+      const { signedTxBlob } = await signer.sign(prepared as unknown as Record<string, unknown>);
       const { result: submitResult } = await client.submitAndWait(
-        signed.tx_blob,
+        signedTxBlob,
       );
       const meta = submitResult.meta;
       const engineResult =
@@ -208,7 +263,7 @@ export function createPaymentClient(
     return `${whole}${fracStr} XRP`;
   }
 
-  const paymentClient = new x402Client()
+  let paymentClient = new x402Client()
     .register('xrpl:*', new ExactXrplScheme(signer))
     // The SDK's own per-payment cap. Only XRP needs an explicit
     // allowedAssets entry to remain payable at all once this is enabled --
@@ -253,16 +308,29 @@ export function createPaymentClient(
     // always paid in XRP instead. Route the RLUSD case through the same
     // isRlusdAsset() check already used correctly elsewhere in this file.
     .registerPolicy((_x402Version, requirements) => {
-      if (!preferredAsset) {
-        return requirements;
+      let candidates = requirements;
+      if (preferredAsset) {
+        const wantsRlusd = preferredAsset.toLowerCase() === 'rlusd';
+        const matches = candidates.filter((r) =>
+          wantsRlusd
+            ? isRlusdAsset(r.asset)
+            : r.asset.toLowerCase() === preferredAsset!.toLowerCase(),
+        );
+        candidates = matches.length > 0 ? matches : candidates;
       }
-      const wantsRlusd = preferredAsset.toLowerCase() === 'rlusd';
-      const matches = requirements.filter((r) =>
-        wantsRlusd
-          ? isRlusdAsset(r.asset)
-          : r.asset.toLowerCase() === preferredAsset!.toLowerCase(),
-      );
-      return matches.length > 0 ? matches : requirements;
+      // Prefer the channel scheme for XRP whenever this wallet has an open
+      // one -- caps exposure to the channel's deposit instead of the whole
+      // account (see the plan this implements). Only reachable when the
+      // asset filter above didn't already rule XRP out (e.g. an explicit
+      // RLUSD preference -- channels don't exist for RLUSD, XRPL payment
+      // channels are XRP-only).
+      if (channelId) {
+        const channelOption = candidates.find((r) => r.scheme === XRPL_CHANNEL_SCHEME);
+        if (channelOption) {
+          return [channelOption];
+        }
+      }
+      return candidates;
     })
     // Runs after the selector has already picked which requirement to pay,
     // whether that came from an explicit asset preference or the plain
@@ -333,5 +401,18 @@ export function createPaymentClient(
       }
     });
 
-  return { paymentClient, walletAddress: wallet.address, setPreferredAsset };
+  // Only registered when a channel actually exists -- nothing to sign
+  // against otherwise, and the registerPolicy preference above only ever
+  // looks for it when channelId is set anyway.
+  if (channelId) {
+    if (!agentRailUrl) {
+      throw new Error('a channel needs agentRailUrl to read its accepted amount from');
+    }
+    paymentClient = paymentClient.register(
+      'xrpl:*',
+      new XrplChannelClientScheme(channelId, channelClaimSigner, agentRailUrl),
+    );
+  }
+
+  return { paymentClient, walletAddress: signer.classicAddress, setPreferredAsset };
 }

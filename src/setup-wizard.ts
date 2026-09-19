@@ -19,10 +19,12 @@ import {
   cancel,
 } from '@clack/prompts';
 import { styleText } from 'node:util';
-import { Client, Wallet } from 'xrpl';
-import { XRPL_TESTNET_WS_URL } from '@x402/xrpl';
+import { Client, Wallet, type SetRegularKey } from 'xrpl';
+import { XRPL_MAINNET_WS_URL, XRPL_TESTNET_WS_URL } from '@x402/xrpl';
 import { DECIMAL_AMOUNT_RE } from './xrpl-payment-client.js';
 import { CLIENT_TARGETS } from './client-targets/index.js';
+import { OWN_VERSION } from './version.js';
+import { brokerSupported, installBroker } from './broker/install.js';
 
 type Network = 'testnet' | 'mainnet';
 type WalletSource = 'existing' | 'new';
@@ -113,15 +115,15 @@ async function resolveWallet(
   source: WalletSource,
 ): Promise<{ seed: string; address: string }> {
   // A boxed, red note rather than log.warn() -- this is the one warning in
-  // the whole flow the user must not skim past.
+  // the whole flow the user must not skim past. Deliberately doesn't claim
+  // *where* this seed ends up yet -- that depends on whether key rotation
+  // (right after this) succeeds, and gets spelled out precisely there.
   note(
     styleText(
       'red',
-      "This seed is a secret, like a password -- whoever has it can move funds from this wallet.\n\n" +
-        "It ends up stored in plain text in your MCP client's local config file. That's " +
-        "inherent to how this is built (it never sends your key anywhere, or holds your " +
-        "funds for you) -- the tradeoff is that nothing else protects that file for you " +
-        'either.\n\n' +
+      "This seed is a secret, like a password -- whoever has it can move funds from this wallet. " +
+        "This tool never sends your key anywhere or holds your funds for you -- you're fully " +
+        'responsible for keeping it safe.\n\n' +
         (network === 'testnet'
           ? 'Testnet is free, worthless play money, so this is low-stakes.'
           : "Use a mainnet wallet with only small amounts you'd be comfortable losing."),
@@ -159,6 +161,146 @@ async function resolveWallet(
   await client.disconnect();
   s.stop(`Funded ${wallet.address} with free testnet XRP.`);
   return { seed: wallet.seed!, address: wallet.address };
+}
+
+// Shows a secret seed once and blocks until the user explicitly confirms
+// they saved it -- re-shown (not re-explained) on "no" instead of silently
+// moving on, since this is the one moment it's visible at all.
+async function confirmSeedSaved(seed: string, persistedElsewhere: boolean): Promise<void> {
+  const message = persistedElsewhere
+    ? 'This seed will be saved in plain text in your MCP client\'s config, same as ' +
+      "before -- it's shown here too so you have your own copy."
+    : "This is your wallet's MASTER key -- it controls the wallet completely, forever. " +
+      "It will NOT be saved anywhere by this tool, in any file. Copy it now and save it " +
+      'somewhere safe (a password manager, an offline note). If you lose it, the wallet ' +
+      'keeps working fine day to day -- you only lose the ability to rotate away from the ' +
+      "operating key below if it's ever compromised.";
+
+  note(styleText('red', `${message}\n\nSeed: ${seed}`), 'Your wallet seed (shown once)');
+
+  for (;;) {
+    const saved = checkCancel(
+      await confirm({
+        message: 'Have you copied and saved this seed somewhere safe? It will not be shown again.',
+        initialValue: false,
+      }),
+    );
+    if (saved) {
+      return;
+    }
+    note(styleText('red', seed), 'Seed (shown again)');
+  }
+}
+
+// Tries to move day-to-day signing off the master key and onto a separate,
+// rotatable "operating" key (an XRPL Regular Key) -- so a leaked operating
+// seed (the one that actually ends up in an MCP client's config) can be
+// revoked by re-running SetRegularKey from the master key, instead of the
+// wallet being burned forever. Requires the master account to already exist
+// on the ledger (funded/activated) -- a brand-new mainnet wallet isn't yet,
+// since there's no faucet, so this falls back to using the master seed
+// directly until the user funds it and reruns setup.
+async function setupSigningCredentials(
+  network: Network,
+  masterWallet: Wallet,
+): Promise<{ seed: string; masterAddress?: string }> {
+  const wsUrl = network === 'mainnet' ? XRPL_MAINNET_WS_URL : XRPL_TESTNET_WS_URL;
+  const client = new Client(wsUrl);
+  await client.connect();
+
+  try {
+    try {
+      await client.request({ command: 'account_info', account: masterWallet.address });
+    } catch {
+      log.warn(
+        "This account isn't funded/activated on the ledger yet, so key rotation can't be " +
+          'set up now. Fund it, then rerun this setup to enable it.',
+      );
+      await confirmSeedSaved(masterWallet.seed!, true);
+      return { seed: masterWallet.seed! };
+    }
+
+    const operatingWallet = Wallet.generate();
+    const s = spinner();
+    s.start('Setting up a rotatable operating key (Regular Key)...');
+    try {
+      const tx: SetRegularKey = {
+        TransactionType: 'SetRegularKey',
+        Account: masterWallet.address,
+        RegularKey: operatingWallet.address,
+      };
+      const prepared = await client.autofill(tx);
+      const signed = masterWallet.sign(prepared);
+      const { result } = await client.submitAndWait(signed.tx_blob);
+      const meta = result.meta;
+      const engineResult =
+        meta && typeof meta === 'object' && 'TransactionResult' in meta
+          ? meta.TransactionResult
+          : undefined;
+      if (engineResult !== 'tesSUCCESS') {
+        throw new Error(`SetRegularKey did not succeed (${String(engineResult)})`);
+      }
+    } catch (error) {
+      s.stop('Could not set up key rotation.');
+      log.error(`${String(error)} -- using the master seed directly instead.`);
+      await confirmSeedSaved(masterWallet.seed!, true);
+      return { seed: masterWallet.seed! };
+    }
+    s.stop('Operating key authorized on-chain.');
+
+    await confirmSeedSaved(masterWallet.seed!, false);
+    return { seed: operatingWallet.seed!, masterAddress: masterWallet.address };
+  } finally {
+    await client.disconnect();
+  }
+}
+
+// Offers to install the local signing broker (see src/broker/) once key
+// rotation has succeeded and this platform supports it -- moves the
+// operating seed out of the MCP server process entirely, since that's the
+// process `npx -y` silently re-fetches on every client restart. Falls back
+// to putting the operating seed directly in the config (today's behavior)
+// when rotation didn't happen, the platform isn't supported, the install
+// fails, or the user declines.
+async function promptSigningEnv(signing: {
+  seed: string;
+  masterAddress?: string;
+}): Promise<Record<string, string>> {
+  if (!signing.masterAddress || !brokerSupported()) {
+    return {
+      POLYPAY_WALLET_SEED: signing.seed,
+      ...(signing.masterAddress ? { POLYPAY_MASTER_ADDRESS: signing.masterAddress } : {}),
+    };
+  }
+
+  const install = checkCancel(
+    await confirm({
+      message:
+        'Install a local signing broker? (recommended) Keeps your operating key out of ' +
+        "the MCP server package entirely -- npx re-fetches that package on every restart; " +
+        "the broker is installed once and isn't automatically replaced.",
+      initialValue: true,
+    }),
+  );
+  if (!install) {
+    return { POLYPAY_WALLET_SEED: signing.seed, POLYPAY_MASTER_ADDRESS: signing.masterAddress };
+  }
+
+  const s = spinner();
+  s.start('Installing the local signing broker...');
+  try {
+    const { socketPath, token } = installBroker(signing.seed, signing.masterAddress);
+    s.stop('Broker installed and running.');
+    return {
+      POLYPAY_BROKER_SOCKET: socketPath,
+      POLYPAY_BROKER_TOKEN: token,
+      POLYPAY_MASTER_ADDRESS: signing.masterAddress,
+    };
+  } catch (error) {
+    s.stop('Could not install the broker.');
+    log.error(`${String(error)} -- falling back to storing the operating seed directly.`);
+    return { POLYPAY_WALLET_SEED: signing.seed, POLYPAY_MASTER_ADDRESS: signing.masterAddress };
+  }
 }
 
 function validateOptionalDecimal(value: string | undefined): string | undefined {
@@ -229,16 +371,20 @@ export async function runSetupWizard(): Promise<void> {
   intro('PolymitaPay MCP setup');
 
   const { network, source } = await chooseNetworkAndSource();
-  const { seed, address } = await resolveWallet(network, source);
+  const { seed: masterSeed, address } = await resolveWallet(network, source);
   log.info(`Wallet address: ${address}`);
+
+  const masterWallet = Wallet.fromSeed(masterSeed);
+  const signing = await setupSigningCredentials(network, masterWallet);
+  const signingEnv = await promptSigningEnv(signing);
 
   const spendLimits = await promptSpendLimits();
 
   const mcpServerConfig = {
     command: 'npx',
-    args: ['-y', '@polymitapay/mcp'],
+    args: ['-y', `@polymitapay/mcp@${OWN_VERSION}`],
     env: {
-      POLYPAY_WALLET_SEED: seed,
+      ...signingEnv,
       POLYPAY_NETWORK: network,
       ...(spendLimits.maxPerCallXrp ? { POLYPAY_MAX_PER_CALL_XRP: spendLimits.maxPerCallXrp } : {}),
       ...(spendLimits.maxPerCallRlusd

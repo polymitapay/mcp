@@ -31,6 +31,19 @@ This walks you through everything in one go:
   automatically, or lets you paste a seed you already have;
 - shows the security warning below, in plain sight, before it asks for
   anything sensitive;
+- if the wallet is already funded/activated, sets up an XRPL Regular
+  Key automatically: a separate "operating" key that signs your
+  payments day to day, so if it ever leaks, you can rotate away from
+  it (by running `SetRegularKey` again from your master key) instead
+  of the wallet being burned forever. Your master seed is shown once
+  for you to save — it's never written to any config file, only the
+  operating seed is;
+- on macOS and Windows, offers to install a local signing broker: a
+  small background service, installed once to a fixed location on
+  your machine, that holds the operating key and does the actual
+  signing. The MCP server package itself (what `npx -y` re-fetches on
+  every restart) then never sees the key at all — only the broker's
+  connection info goes into your MCP client's config;
 - offers to set spending limits (recommended — see "All settings"
   below);
 - detects Claude Code and/or Claude Desktop on your machine and offers
@@ -50,7 +63,7 @@ real one):
   "mcpServers": {
     "polymitapay": {
       "command": "npx",
-      "args": ["-y", "@polymitapay/mcp"],
+      "args": ["-y", "@polymitapay/mcp@0.1.7"],
       "env": {
         "POLYPAY_WALLET_SEED": "s...",
         "POLYPAY_NETWORK": "testnet"
@@ -59,6 +72,14 @@ real one):
   }
 }
 ```
+
+**Pin the version** (`@polymitapay/mcp@0.1.7` above, not a bare
+`@polymitapay/mcp`) — run `npm view @polymitapay/mcp version` to check
+the current one. Without a pin, `npx` silently fetches whatever is
+`latest` on npm every time your MCP client restarts the server, which
+means a compromised or unexpected publish could run with your wallet
+seed already in its environment. The interactive setup (step 1) does
+this for you automatically.
 
 Restart your MCP client, and you're done — no separate install step,
 `npx` fetches the package on first run. For testing, the easiest way to
@@ -76,6 +97,12 @@ never sends your key anywhere, or holds your funds for you — the
 tradeoff is that nothing else can protect that file for you either), not
 something a future update fixes.
 
+If your wallet was funded/activated when you ran setup, this seed is an
+*operating* key authorized via a Regular Key, not your wallet's master
+key — if it ever leaks, you can revoke it by rerunning `SetRegularKey`
+from your master key (kept only in your own hands, never written to any
+file by this tool), instead of losing the wallet entirely.
+
 **Practical rule: use a testnet wallet (free, worthless play money) while
 you're trying this out, or a mainnet wallet with only small amounts you
 could afford to lose.** Don't point this at a wallet holding funds you
@@ -85,7 +112,10 @@ can't afford to lose.
 
 | Variable | Required | Default | What it does |
 | --- | --- | --- | --- |
-| `POLYPAY_WALLET_SEED` | yes | — | The wallet seed from step 1 or 2 above. |
+| `POLYPAY_WALLET_SEED` | only without a broker | — | The wallet seed from step 1 or 2 above. If you've rotated to a Regular Key (see step 1), this is the *operating* seed, not your master seed. Not needed (and not written to config) when the local signing broker is installed — see `POLYPAY_BROKER_SOCKET` below. |
+| `POLYPAY_MASTER_ADDRESS` | only if rotated | — | Set whenever you rotated to a Regular Key (with or without the broker): the address of the account signing is done on behalf of. Leave unset for a plain, unrotated wallet. |
+| `POLYPAY_BROKER_SOCKET` | only with a broker | — | Path to the local signing broker's socket (macOS) or its named pipe (Windows). Set automatically by the interactive setup when you accept the broker install; implies `POLYPAY_WALLET_SEED` is not needed. |
+| `POLYPAY_BROKER_TOKEN` | only with a broker | — | Auth token for the local signing broker, generated at install time. |
 | `POLYPAY_NETWORK` | no | `testnet` | `testnet` (free, for trying this out) or `mainnet` (real funds). |
 | `POLYPAY_API_URL` | no | `https://api.polymitapay.com` | Only relevant if you're running this against your own copy of PolyPay's backend, not the hosted one. |
 | `POLYPAY_MAX_PER_CALL_XRP` | no | no limit | Refuses any single call priced above this many XRP. |
