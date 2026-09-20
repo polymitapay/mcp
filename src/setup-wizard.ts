@@ -22,9 +22,23 @@ import { styleText } from 'node:util';
 import { Client, Wallet, type SetRegularKey } from 'xrpl';
 import { XRPL_MAINNET_WS_URL, XRPL_TESTNET_WS_URL } from '@x402/xrpl';
 import { DECIMAL_AMOUNT_RE } from './xrpl-payment-client.js';
+import {
+  dropsToXrp,
+  fetchChannelConfig,
+  openPaymentChannel,
+  spendableDrops,
+  wsUrlFor,
+  xrpToDrops,
+  type ChannelConfig,
+} from './channel-setup.js';
 import { CLIENT_TARGETS } from './client-targets/index.js';
 import { OWN_VERSION } from './version.js';
 import { brokerSupported, installBroker } from './broker/install.js';
+
+// Same default as index.ts: the wizard talks to the same agent-rail the
+// server will, so a channel is opened towards the platform wallet that
+// will actually accept its claims.
+const AGENT_RAIL_URL = process.env.POLYPAY_API_URL ?? 'https://api.polymitapay.com';
 
 type Network = 'testnet' | 'mainnet';
 type WalletSource = 'existing' | 'new';
@@ -303,6 +317,120 @@ async function promptSigningEnv(signing: {
   }
 }
 
+// Opening a payment channel, with every consequence spelled out first.
+// Optional on purpose: a wallet without one just pays with the plain
+// `exact` scheme, exactly as before channels existed. Returns the env var
+// to write, or nothing at all if this was skipped or couldn't be done --
+// a failure here must never cost the user their whole setup run.
+async function promptPaymentChannel(
+  network: Network,
+  signing: { seed: string; masterAddress?: string },
+): Promise<Record<string, string>> {
+  const wallet = signing.masterAddress
+    ? Wallet.fromSeed(signing.seed, { masterAddress: signing.masterAddress })
+    : Wallet.fromSeed(signing.seed);
+
+  let config: ChannelConfig;
+  try {
+    config = await fetchChannelConfig(AGENT_RAIL_URL);
+  } catch (error) {
+    // An agent-rail too old to answer this can still take plain payments,
+    // so this is worth a line, not a failure.
+    log.warn(`Skipping payment channels: ${String(error)}`);
+    return {};
+  }
+
+  const settleDelayHours = Math.ceil(config.minSettleDelaySeconds / 3600);
+  note(
+    'A payment channel is a prepaid tab: you lock some XRP up front, and then each call is ' +
+      'paid by signing a receipt instead of sending a transaction. That makes calls instant ' +
+      'and saves a network fee every time.\n\n' +
+      'What it costs you:\n' +
+      `  - The deposit stays locked in the channel until you close it.\n` +
+      `  - Closing takes ${settleDelayHours}h to complete, and this tool can't close it for ` +
+      'you yet -- you would do it from any XRPL wallet.\n' +
+      '  - Opening it costs one transaction fee, and ~0.2 XRP stays reserved while it exists.\n\n' +
+      'Without a channel, calls are paid one transaction at a time, which works fine too.',
+    'Payment channels',
+  );
+
+  const wantChannel = checkCancel(
+    await confirm({
+      message: 'Open a payment channel now?',
+      // Real money on mainnet, play money on testnet -- the safe default
+      // differs, so it follows the network rather than being the same
+      // nudge for both.
+      initialValue: network === 'testnet',
+    }),
+  );
+  if (!wantChannel) {
+    return {};
+  }
+
+  const client = new Client(wsUrlFor(network));
+  const s = spinner();
+  try {
+    await client.connect();
+
+    s.start('Checking what this wallet can put into a channel...');
+    const spendable = await spendableDrops(client, wallet.classicAddress);
+    if (spendable === null) {
+      s.stop('This wallet has no funds on the ledger yet.');
+      log.warn(
+        'A channel needs a funded account. Fund this wallet and re-run setup to open one later.',
+      );
+      return {};
+    }
+    if (spendable === 0n) {
+      s.stop("This wallet doesn't have enough spare XRP for a channel.");
+      log.warn('Fund it with a bit more and re-run setup to open one later.');
+      return {};
+    }
+    s.stop(`This wallet can put up to ${dropsToXrp(spendable)} XRP into a channel.`);
+
+    const depositXrp = checkCancel(
+      await text({
+        message: 'How much XRP do you want to deposit?',
+        placeholder: dropsToXrp(spendable < xrpToDrops('5') ? spendable : xrpToDrops('5')),
+        validate: (value) => {
+          if (!value || !DECIMAL_AMOUNT_RE.test(value)) {
+            return 'Enter a plain decimal number, e.g. "5" or "1.5".';
+          }
+          const drops = xrpToDrops(value);
+          if (drops <= 0n) {
+            return 'Deposit something above zero.';
+          }
+          if (drops > spendable) {
+            return `That's more than this wallet can spare (${dropsToXrp(spendable)} XRP).`;
+          }
+          return undefined;
+        },
+      }),
+    );
+
+    s.start('Opening the channel on the ledger...');
+    const { channelId } = await openPaymentChannel({
+      client,
+      wallet,
+      payTo: config.payTo,
+      depositDrops: xrpToDrops(depositXrp),
+      settleDelaySeconds: config.minSettleDelaySeconds,
+    });
+    s.stop(`Channel open with ${depositXrp} XRP.`);
+    log.info(`Channel id: ${channelId}`);
+
+    return { POLYPAY_CHANNEL_ID: channelId };
+  } catch (error) {
+    s.stop('Could not open the channel.');
+    log.error(`${String(error)} -- continuing without one; calls will pay per transaction.`);
+    return {};
+  } finally {
+    if (client.isConnected()) {
+      await client.disconnect();
+    }
+  }
+}
+
 function validateOptionalDecimal(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
@@ -379,6 +507,7 @@ export async function runSetupWizard(): Promise<void> {
   const signingEnv = await promptSigningEnv(signing);
 
   const spendLimits = await promptSpendLimits();
+  const channelEnv = await promptPaymentChannel(network, signing);
 
   const mcpServerConfig = {
     command: 'npx',
@@ -386,6 +515,7 @@ export async function runSetupWizard(): Promise<void> {
     env: {
       ...signingEnv,
       POLYPAY_NETWORK: network,
+      ...channelEnv,
       ...(spendLimits.maxPerCallXrp ? { POLYPAY_MAX_PER_CALL_XRP: spendLimits.maxPerCallXrp } : {}),
       ...(spendLimits.maxPerCallRlusd
         ? { POLYPAY_MAX_PER_CALL_RLUSD: spendLimits.maxPerCallRlusd }
